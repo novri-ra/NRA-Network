@@ -846,7 +846,7 @@ function Monitor-LiveLatency {
     )
     $pinger = New-Object System.Net.NetworkInformation.Ping
     $hist = @{}; $targets | ForEach-Object { $hist[$_.IP] = [System.Collections.ArrayList]::new() }
-    $sparkChars = @(' ','`u{2582}','`u{2583}','`u{2584}','`u{2585}','`u{2586}','`u{2587}','`u{2588}')
+    $sparkChars = @([char]0x20, [char]0x2582, [char]0x2583, [char]0x2584, [char]0x2585, [char]0x2586, [char]0x2587, [char]0x2588)
     Write-Host "  $(C 'DG' ('{0,-25} | {1,-6} | {2,-6} | {3,-6} | {4}' -f 'Target','Cur','Avg','Jitter','Sparkline'))"
     Write-Host "  $(C 'DG' ('-' * 80))"
     $baseY = [Console]::CursorTop
@@ -938,35 +938,39 @@ function Show-Menu {
     $aName = if ($adapter) { $adapter.Name } else { 'NONE DETECTED' }
 
     while ($true) {
+        # Menu row helper: pads content to exactly 60 visible chars between │ borders
+        function MR($content, $rawLen) { "  $(C 'C' '│') $($content)$(' ' * [Math]::Max(0, 59 - $rawLen))$(C 'C' '│')" }
         Write-Host ""
         Write-Host "  $(C 'C' '┌──────────────────────────────────────────────────────────────┐')"
-        Write-Host "  $(C 'C' '│')  $(C 'BOLD' 'GOD-MODE ACTION MENU')          Adapter: $(C 'Y' $aName)"
+        $adpStr = "Adapter: $aName"
+        $padA = [Math]::Max(1, 59 - 21 - $adpStr.Length)
+        Write-Host "  $(C 'C' '│') $(C 'BOLD' 'GOD-MODE ACTION MENU')$(' ' * $padA)$(C 'Y' $adpStr) $(C 'C' '│')"
         Write-Host "  $(C 'C' '├──────────────────────────────────────────────────────────────┤')"
-        Write-Host "  $(C 'C' '│')  $(C 'DG' '[ DNS PROFILES ]')                                       $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'G' '1.') Apply #1 Fastest DNS Pair (IPv4+IPv6)               $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'G' '2.') Apply Best Gaming DNS (ECS + Low Jitter)            $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'G' '3.') Apply Best AdBlock DNS Pair                         $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'G' '4.') Apply Best Privacy DNS Pair                         $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'C' '5.') Select Custom Provider from Ranking                 $(C 'C' '│')"
+        Write-Host (MR "$(C 'DG' '[ DNS PROFILES ]')" 16)
+        Write-Host (MR " $(C 'G' '1.') Apply #1 Fastest DNS Pair (IPv4+IPv6)" 41)
+        Write-Host (MR " $(C 'G' '2.') Apply Best Gaming DNS (ECS + Low Jitter)" 44)
+        Write-Host (MR " $(C 'G' '3.') Apply Best AdBlock DNS Pair" 30)
+        Write-Host (MR " $(C 'G' '4.') Apply Best Privacy DNS Pair" 30)
+        Write-Host (MR " $(C 'C' '5.') Select Custom Provider from Ranking" 38)
         Write-Host "  $(C 'C' '├──────────────────────────────────────────────────────────────┤')"
-        Write-Host "  $(C 'C' '│')  $(C 'DG' '[ NETWORK & LATENCY TUNING ]')                           $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'G' '6.') Auto-Detect & Apply Optimal MTU                     $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'M' '7.') Run Windows DNS Cache, TCP & NIC Hardware Tuning    $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'Y' '8.') Test Game Server Routing (SEA Latency)              $(C 'C' '│')"
+        Write-Host (MR "$(C 'DG' '[ NETWORK & LATENCY TUNING ]')" 28)
+        Write-Host (MR " $(C 'G' '6.') Auto-Detect & Apply Optimal MTU" 35)
+        Write-Host (MR " $(C 'M' '7.') Run DNS Cache, TCP & NIC Hardware Tuning" 45)
+        Write-Host (MR " $(C 'Y' '8.') Test Game Server Routing (SEA Latency)" 42)
         Write-Host "  $(C 'C' '├──────────────────────────────────────────────────────────────┤')"
-        Write-Host "  $(C 'C' '│')  $(C 'DG' '[ DIAGNOSTICS & ADVANCED ]')                              $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'C' '12.') Live Latency & Jitter Monitor (Real-time)          $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'C' '13.') Compare Active ISP DNS vs Top Providers            $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'M' '14.') Enable Windows Native DNS-over-HTTPS (DoH)        $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'Y' '15.') Network Bufferbloat & Response Sanity Test         $(C 'C' '│')"
+        Write-Host (MR "$(C 'DG' '[ DIAGNOSTICS & ADVANCED ]')" 26)
+        Write-Host (MR " $(C 'C' '12.') Live Latency & Jitter Monitor (Real-time)" 47)
+        Write-Host (MR " $(C 'C' '13.') Compare Active ISP DNS vs Top Providers" 44)
+        Write-Host (MR " $(C 'M' '14.') Enable Windows Native DNS-over-HTTPS (DoH)" 48)
+        Write-Host (MR " $(C 'Y' '15.') Network Bufferbloat & Response Sanity Test" 47)
         Write-Host "  $(C 'C' '├──────────────────────────────────────────────────────────────┤')"
-        Write-Host "  $(C 'C' '│')  $(C 'DG' '[ MANAGEMENT & TELEMETRY ]')                             $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'M' '9.') Restore Previous DNS from Backup                    $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'Y' '10.') Reset to Default DHCP (ISP)                        $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'B' '11.') Export Full Telemetry (CSV, JSON, Markdown Report) $(C 'C' '│')"
+        Write-Host (MR "$(C 'DG' '[ MANAGEMENT & TELEMETRY ]')" 26)
+        Write-Host (MR " $(C 'M' '9.') Restore Previous DNS from Backup" 35)
+        Write-Host (MR " $(C 'Y' '10.') Reset to Default DHCP (ISP)" 31)
+        Write-Host (MR " $(C 'B' '11.') Export Full Telemetry (CSV/JSON/Markdown)" 46)
         Write-Host "  $(C 'C' '├──────────────────────────────────────────────────────────────┤')"
-        Write-Host "  $(C 'C' '│')  $(C 'DG' '[ EXIT ]')                                               $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'DG' '0.') Exit                                                $(C 'C' '│')"
+        Write-Host (MR "$(C 'DG' '[ EXIT ]')" 8)
+        Write-Host (MR " $(C 'DG' '0.') Exit" 8)
         Write-Host "  $(C 'C' '└──────────────────────────────────────────────────────────────┘')"
         $c = Read-Host "  Select option"
 
