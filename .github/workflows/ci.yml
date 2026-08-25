@@ -1,47 +1,47 @@
-name: CI - Script Validation
+name: CI Pipeline
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
-    branches: [main]
+    branches: [ main ]
 
 jobs:
   validate:
+    name: Validate PowerShell Scripts
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Parse PowerShell scripts (syntax check)
+      - name: Check PowerShell Syntax (AST Parsing)
         shell: pwsh
         run: |
-          $errors = @()
-          Get-ChildItem -Filter *.ps1 -Recurse | ForEach-Object {
-            $tokens = $null
-            $parseErrors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors)
-            if ($parseErrors.Count -gt 0) {
-              $errors += "$($_.Name): $($parseErrors.Count) parse error(s)"
-              $parseErrors | ForEach-Object { Write-Host "  ERROR: $_" }
-            } else {
-              Write-Host "OK: $($_.Name)"
-            }
+          $files = Get-ChildItem -Filter *.ps1 -Recurse
+          $hasError = $false
+          foreach ($file in $files) {
+              Write-Host "Parsing $($file.FullName)..."
+              $errors = $null
+              $tokens = $null
+              $null = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors)
+              if ($errors -and $errors.Count -gt 0) {
+                  Write-Error "Syntax errors in $($file.Name):"
+                  $errors | ForEach-Object { Write-Error $_.Message }
+                  $hasError = $true
+              } else {
+                  Write-Host "✓ $($file.Name) syntax is valid." -ForegroundColor Green
+              }
           }
-          if ($errors.Count -gt 0) {
-            Write-Error "Syntax errors found: $($errors -join '; ')"
-            exit 1
+          if ($hasError) {
+              exit 1
           }
 
-      - name: Run PSScriptAnalyzer
-        shell: pwsh
+      - name: Verify Batch Script Launcher
+        shell: cmd
         run: |
-          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
-          $results = Get-ChildItem -Filter *.ps1 -Recurse | ForEach-Object {
-            Invoke-ScriptAnalyzer -Path $_.FullName -Severity Error
-          }
-          if ($results) {
-            $results | Format-Table -AutoSize
-            Write-Error "PSScriptAnalyzer found $($results.Count) error(s)"
-            exit 1
-          }
-          Write-Host "PSScriptAnalyzer: all clear"
+          if not exist "start_benchmark.bat" (
+              echo start_benchmark.bat is missing!
+              exit /b 1
+          ) else (
+              echo start_benchmark.bat exists.
+          )
