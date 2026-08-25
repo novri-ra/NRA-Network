@@ -1,35 +1,43 @@
-name: Release Builder
+name: Build & Publish Release
 
 on:
   push:
-    tags: ['v*']
+    tags:
+      - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-release:
+  release:
+    name: Package & Publish Release
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Package release ZIP
+      - name: Package Distribution ZIP
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          $zipName = "NRA-Network-${tag}.zip"
-          $files = @('start_benchmark.bat', 'dns_benchmark.ps1', 'README.md', 'LICENSE')
-          Compress-Archive -Path $files -DestinationPath $zipName -Force
-          Write-Host "Created: $zipName"
+          $tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "v1.0.0" }
+          $zipName = "NRA-Network-$tag.zip"
+          $filesToPackage = @("start_benchmark.bat", "dns_benchmark.ps1", "README.md", "LICENSE")
+          Compress-Archive -Path $filesToPackage -DestinationPath $zipName -Force
+          $hash = (Get-FileHash -Path $zipName -Algorithm SHA256).Hash
+          "$hash  $zipName" | Out-File -FilePath "$zipName.sha256" -Encoding utf8
+          Write-Host "Created $zipName with SHA256: $hash"
 
-          $hash = (Get-FileHash $zipName -Algorithm SHA256).Hash
-          "$hash  $zipName" | Out-File -FilePath "SHA256SUMS.txt" -Encoding utf8
-          Write-Host "SHA256: $hash"
-
-      - name: Publish GitHub Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
+          name: NRA-Network ${{ github.ref_name }}
+          draft: false
+          prerelease: false
           generate_release_notes: true
           files: |
-            NRA-Network-${{ github.ref_name }}.zip
-            SHA256SUMS.txt
+            NRA-Network-*.zip
+            NRA-Network-*.zip.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
