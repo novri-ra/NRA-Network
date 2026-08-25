@@ -306,8 +306,18 @@ $BtnRunBenchmark.Add_Click({
             if ($results.Count -gt 0) {
                 $StatTopDns.Text = "$($results[0].Name) ($($results[0].IP))"
             }
-            $StatLowestPing.Text = if ($bestPing -eq [double]::MaxValue) { "---" } else { "$([math]::Round($bestPing,1))" }
-            $StatDnsResolve.Text = if ($bestDns -eq [double]::MaxValue) { "---" } else { "$([math]::Round($bestDns,1))" }
+            if ($bestPing -eq [double]::MaxValue) { $StatLowestPing.Text = "---" }
+            else {
+                $pv = [math]::Round($bestPing,1)
+                $pi = if ($pv -lt 30) { [char]0x25BC } elseif ($pv -lt 80) { [char]0x25CF } else { [char]0x25B2 }
+                $StatLowestPing.Text = "$pi $pv"
+            }
+            if ($bestDns -eq [double]::MaxValue) { $StatDnsResolve.Text = "---" }
+            else {
+                $dv = [math]::Round($bestDns,1)
+                $di = if ($dv -lt 30) { [char]0x25BC } elseif ($dv -lt 80) { [char]0x25CF } else { [char]0x25B2 }
+                $StatDnsResolve.Text = "$di $dv"
+            }
 
             Log-Message "Benchmark Complete. Found $($results.Count) results."
         }
