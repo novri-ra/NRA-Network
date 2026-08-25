@@ -1,0 +1,6 @@
+telemetry/
+backup/
+*.log
+*.tmp
+.vs/
+.vscode/
