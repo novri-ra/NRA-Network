@@ -50,11 +50,11 @@ $script:DnsProviders = @(
     @{Name="Google Secondary";       IP="8.8.4.4";         IPv6="2001:4860:4860::8844"; Category="Fast";  DoH="https://dns.google/dns-query";         DoT="dns.google";         ECS=$true}
     @{Name="OpenDNS Primary";        IP="208.67.222.222";  IPv6="2620:119:35::35";      Category="Fast";  DoH="https://doh.opendns.com/dns-query";    DoT="";                   ECS=$true}
     @{Name="OpenDNS Secondary";      IP="208.67.220.220";  IPv6="2620:119:53::53";      Category="Fast";  DoH="https://doh.opendns.com/dns-query";    DoT="";                   ECS=$true}
-    @{Name="Gcore Primary";          IP="2.56.220.2";      IPv6="";                     Category="Fast";  DoH="https://doh.gcore.com/dns-query";      DoT="";                   ECS=$false}
-    @{Name="Gcore Secondary";        IP="95.85.95.85";     IPv6="";                     Category="Fast";  DoH="https://doh.gcore.com/dns-query";      DoT="";                   ECS=$false}
+    @{Name="Gcore Primary";          IP="2.56.220.2";      IPv6="2a03:90c0:9992::1";    Category="Fast";  DoH="https://doh.gcore.com/dns-query";      DoT="";                   ECS=$false}
+    @{Name="Gcore Secondary";        IP="95.85.95.85";     IPv6="2a03:90c0:9992::2";    Category="Fast";  DoH="https://doh.gcore.com/dns-query";      DoT="";                   ECS=$false}
     @{Name="Hurricane Electric";     IP="74.82.42.42";     IPv6="2001:470:20::2";       Category="Fast";  DoH="";                                     DoT="";                   ECS=$false}
-    @{Name="Level3/Lumen 1";         IP="4.2.2.1";         IPv6="";                     Category="Fast";  DoH="";                                     DoT="";                   ECS=$false}
-    @{Name="Level3/Lumen 2";         IP="4.2.2.2";         IPv6="";                     Category="Fast";  DoH="";                                     DoT="";                   ECS=$false}
+    @{Name="Level3/Lumen 1";         IP="4.2.2.1";         IPv6="2001:428::1";          Category="Fast";  DoH="";                                     DoT="";                   ECS=$false}
+    @{Name="Level3/Lumen 2";         IP="4.2.2.2";         IPv6="2001:428::2";          Category="Fast";  DoH="";                                     DoT="";                   ECS=$false}
 
     # Privacy & Security
     @{Name="Quad9 Primary";          IP="9.9.9.9";         IPv6="2620:fe::fe";          Category="Privacy"; DoH="https://dns.quad9.net/dns-query";    DoT="dns.quad9.net";      ECS=$false}
@@ -76,7 +76,7 @@ $script:DnsProviders = @(
     # Regional & Global
     @{Name="AliDNS Primary";         IP="223.5.5.5";       IPv6="2400:3200::1";         Category="Global";  DoH="https://dns.alidns.com/dns-query";   DoT="dns.alidns.com";     ECS=$true}
     @{Name="AliDNS Secondary";       IP="223.6.6.6";       IPv6="2400:3200:baba::1";    Category="Global";  DoH="https://dns.alidns.com/dns-query";   DoT="dns.alidns.com";     ECS=$true}
-    @{Name="Tencent DNSPod";         IP="119.29.29.29";    IPv6="";                     Category="Global";  DoH="";                                   DoT="";                   ECS=$true}
+    @{Name="Tencent DNSPod";         IP="119.29.29.29";    IPv6="2402:4e00::";          Category="Global";  DoH="";                                   DoT="";                   ECS=$true}
     @{Name="Baidu DNS";              IP="180.76.76.76";    IPv6="2400:da00::6666";      Category="Global";  DoH="";                                   DoT="";                   ECS=$true}
     @{Name="Alternate DNS Primary";  IP="76.76.19.19";     IPv6="2602:fcbc::ad";        Category="Global";  DoH="https://dns.alternate-dns.com/dns-query"; DoT="";              ECS=$false}
 )
@@ -409,10 +409,18 @@ function Restore-NetworkSettings {
         $backup = Get-Content $file | ConvertFrom-Json
         if ($backup.DHCP) {
             Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ResetServerAddresses
-        } elseif ($backup.IPv4.Count -gt 0) {
-            Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses $backup.IPv4 -ErrorAction Stop
         } else {
-            Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ResetServerAddresses
+            if ($backup.IPv4 -and $backup.IPv4.Count -gt 0) {
+                Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses $backup.IPv4 -AddressFamily IPv4 -ErrorAction Stop
+            } else {
+                Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ResetServerAddresses -AddressFamily IPv4
+            }
+            
+            if ($backup.IPv6 -and $backup.IPv6.Count -gt 0) {
+                Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses $backup.IPv6 -AddressFamily IPv6 -ErrorAction Stop
+            } else {
+                Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ResetServerAddresses -AddressFamily IPv6
+            }
         }
         
         Write-Host "  $(C 'G' "Restored $($adapter.Name) from backup: $($backup.Timestamp)")"
@@ -442,6 +450,22 @@ function Set-Dns {
         if ($Secondary) { $servers += $Secondary }
         Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses $servers -ErrorAction Stop
 
+        $ipv6Binding = Get-NetAdapterBinding -Name $adapter.Name -ComponentID 'ms_tcpip6' -ErrorAction SilentlyContinue
+        $ipv6Servers = @()
+        if ($ipv6Binding -and $ipv6Binding.Enabled) {
+            $primProvider = $script:DnsProviders | Where-Object { $_.IP -eq $Primary } | Select-Object -First 1
+            $secProvider  = $script:DnsProviders | Where-Object { $_.IP -eq $Secondary } | Select-Object -First 1
+
+            if ($primProvider -and $primProvider.IPv6) { $ipv6Servers += $primProvider.IPv6 } else { $ipv6Servers += "2606:4700:4700::1111" }
+            if ($Secondary) {
+                if ($secProvider -and $secProvider.IPv6) { $ipv6Servers += $secProvider.IPv6 } else { $ipv6Servers += "2001:4860:4860::8888" }
+            }
+
+            if ($ipv6Servers.Count -gt 0) {
+                Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses $ipv6Servers -AddressFamily IPv6 -ErrorAction SilentlyContinue
+            }
+        }
+
         # Best-effort DoH template registration (Win 11 / modern Win 10)
         try {
             $primProvider = $script:DnsProviders | Where-Object { $_.IP -eq $Primary } | Select-Object -First 1
@@ -457,7 +481,8 @@ function Set-Dns {
         } catch {}
 
         ipconfig /flushdns | Out-Null
-        Write-Host "  $(C 'G' "Applied [$Category] DNS to $($adapter.Name): $($servers -join ', ')")"
+        $v6msg = if ($ipv6Servers.Count -gt 0) { " & IPv6: $($ipv6Servers -join ', ')" } else { "" }
+        Write-Host "  $(C 'G' "Applied [$Category] DNS to $($adapter.Name): $($servers -join ', ')$v6msg")"
 
         # Auto-Rollback Safety: verify DNS resolution works
         Write-Host "  $(C 'C' 'Verifying DNS resolution...')"
