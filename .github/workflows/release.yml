@@ -1,0 +1,35 @@
+name: Release Builder
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package release ZIP
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $zipName = "NRA-Network-${tag}.zip"
+          $files = @('start_benchmark.bat', 'dns_benchmark.ps1', 'README.md', 'LICENSE')
+          Compress-Archive -Path $files -DestinationPath $zipName -Force
+          Write-Host "Created: $zipName"
+
+          $hash = (Get-FileHash $zipName -Algorithm SHA256).Hash
+          "$hash  $zipName" | Out-File -FilePath "SHA256SUMS.txt" -Encoding utf8
+          Write-Host "SHA256: $hash"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            NRA-Network-${{ github.ref_name }}.zip
+            SHA256SUMS.txt
