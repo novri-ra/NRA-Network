@@ -1,11 +1,16 @@
 ﻿#Requires -Version 5.1
+[CmdletBinding()]
+param(
+    [ValidateSet('Fastest', 'Gaming', 'Reset', 'BenchmarkOnly', 'Menu')]
+    [string]$Mode = 'Menu'
+)
 <#
 .SYNOPSIS
-    Ultra-Fast DNS Benchmark & Auto-Optimizer (God-Mode Edition v2.1.0)
+    Ultra-Fast DNS Benchmark & Auto-Optimizer (God-Mode Edition v2.2.0)
 .DESCRIPTION
     Unified parallel pipeline, DoH/DoT/Hijack detection, ECS tagging,
     LLMNR/NetBIOS disable, backup/rollback, Markdown/JSON/CSV export,
-    and full 9-option interactive menu.
+    and full interactive menu with CLI profile switching.
 #>
 
 Set-StrictMode -Off
@@ -101,8 +106,8 @@ $script:DnsProviders = @(
 function Show-Banner {
     Write-Host ""
     Write-Host "$(C 'C' '╔═════════════════════════════════════════════════════════════════════════════╗')"
-    Write-Host "$(C 'C' '║') $(C 'BOLD' '   ⚡ DNS OPTIMIZER (GOD-MODE v2.1.0) - Ultra-Fast Network Benchmark     ') $(C 'C' '║')"
-    Write-Host "$(C 'C' '║') $(C 'DG' "   Async Pipeline | DoH/DoT | ISP Detect | Bufferbloat | Live Monitor   ") $(C 'C' '║')"
+    Write-Host "$(C 'C' '║') $(C 'BOLD' '   ⚡ DNS OPTIMIZER (GOD-MODE v2.2.0) - Ultra-Fast Network Benchmark     ') $(C 'C' '║')"
+    Write-Host "$(C 'C' '║') $(C 'DG' "   Pipeline | DoH | ISP Detect | Traceroute | Cache | CLI Profiles      ") $(C 'C' '║')"
     Write-Host "$(C 'C' '╚═════════════════════════════════════════════════════════════════════════════╝')"
     Write-Host ""
 }
@@ -929,6 +934,96 @@ function Compare-ActiveISP {
 }
 
 
+function Trace-EdgeGateway {
+    Write-Host "`n  $(C 'BOLD' 'Fast Edge Route Tracer (SEA Targets)')"
+    $targets = @(
+        @{Name="Cloudflare Anycast"; IP="1.1.1.1"}
+        @{Name="Valve SEA Relay"; IP="103.10.124.1"}
+    )
+    $pinger = New-Object System.Net.NetworkInformation.Ping
+    $maxHops = 15
+    foreach ($t in $targets) {
+        Write-Host "`n  $(C 'C' "Tracing $($t.Name) ($($t.IP)) [Max $maxHops hops]...")"
+        Write-Host "  $(C 'DG' ('{0,-4} {1,-18} {2,-28} {3}' -f 'Hop','IP','Host','RTT'))"
+        Write-Host "  $(C 'DG' ('-' * 68))"
+        $prevLat = 0; $reached = $false
+        for ($ttl = 1; $ttl -le $maxHops; $ttl++) {
+            $opts = New-Object System.Net.NetworkInformation.PingOptions($ttl, $true)
+            $reply = $null; $rtt = 0; $ip = "*"
+            try {
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                $reply = $pinger.Send($t.IP, 800, [byte[]]::new(32), $opts)
+                $sw.Stop()
+                if ($reply.Status -eq 'Success' -or $reply.Status -eq 'TtlExpired') {
+                    $ip = $reply.Address.ToString()
+                    $rtt = if ($reply.Status -eq 'Success') { $reply.RoundtripTime } else { [math]::Round($sw.Elapsed.TotalMilliseconds,1) }
+                }
+            } catch {}
+            if ($ip -eq "*") { Write-Host "  $(C 'DG' ('{0,-4} {1,-18} {2,-28} {3}' -f $ttl,'*','Request timed out.','*'))"; continue }
+            $hn = ""
+            if ($ip -match '^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)') { $hn = "[LAN]" }
+            else { try { $ar = [System.Net.Dns]::BeginGetHostEntry($ip,$null,$null); if ($ar.AsyncWaitHandle.WaitOne(200,$false)) { $hn = [System.Net.Dns]::EndGetHostEntry($ar).HostName } } catch {} }
+            if ($hn.Length -gt 26) { $hn = $hn.Substring(0,23) + "..." }
+            $col = if ($rtt -gt 150) {'R'} elseif ($rtt -gt 80) {'Y'} else {'G'}
+            $spike = if ($prevLat -gt 0 -and ($rtt - $prevLat) -gt 30) { $(C 'R' ' +!BOTTLENECK') } else { "" }
+            Write-Host "  $(C $col ('{0,-4} {1,-18} {2,-28} {3}ms' -f $ttl,$ip,$hn,$rtt))$spike"
+            if ($reply.Status -eq 'Success') { Write-Host "  $(C 'G' 'Target reached.')"; $reached = $true; break }
+            $prevLat = $rtt
+        }
+        if (-not $reached) { Write-Host "  $(C 'Y' 'Trace complete (target not reached).')" }
+    }
+    $pinger.Dispose()
+}
+
+function Inspect-DnsCache {
+    Write-Host "`n  $(C 'BOLD' 'Active DNS Client Cache Inspector')"
+    if (-not (Get-Command Get-DnsClientCache -ErrorAction SilentlyContinue)) { Write-Host "  $(C 'R' 'Get-DnsClientCache not available.')"; return }
+    $cache = Get-DnsClientCache | Where-Object { $_.Status -eq 0 -and $_.Type -in 1,5,28 } | Sort-Object TimeToLive -Descending
+    if (-not $cache) { Write-Host "  $(C 'Y' 'DNS Cache empty or no A/AAAA/CNAME records.')" }
+    else {
+        Write-Host "  $(C 'DG' ('{0,-35} {1,-8} {2,-10} {3}' -f 'Entry','Type','TTL (s)','Data'))"
+        Write-Host "  $(C 'DG' ('-' * 75))"
+        foreach ($c in ($cache | Select-Object -First 20)) {
+            $tN = @{1='A';28='AAAA';5='CNAME'}[[int]$c.Type]; if (-not $tN) { $tN = "$($c.Type)" }
+            $nm = if ($c.Entry.Length -gt 33) { $c.Entry.Substring(0,30)+'...' } else { $c.Entry }
+            $dt = if ($c.Data.Length -gt 20) { $c.Data.Substring(0,17)+'...' } else { $c.Data }
+            $cl = if ($c.TimeToLive -lt 60) {'Y'} else {'G'}
+            Write-Host "  $(C $cl ('{0,-35} {1,-8} {2,-10} {3}' -f $nm,$tN,$c.TimeToLive,$dt))"
+        }
+        if ($cache.Count -gt 20) { Write-Host "  $(C 'DG' "... and $($cache.Count - 20) more entries.")" }
+    }
+    Write-Host ""
+    $resp = Read-Host "  [C] Clear/Flush Cache | [B] Back"
+    if ($resp -match '^c$') { Clear-DnsClientCache -ErrorAction SilentlyContinue; ipconfig /flushdns | Out-Null; Write-Host "  $(C 'G' 'Cache flushed.')" }
+}
+function Test-CustomDnsResolver {
+    param($Results)
+    Write-Host "`n  $(C 'BOLD' 'Custom DNS Resolver Benchmark')"
+    $ip = Read-Host "  Enter IPv4/IPv6 Address (e.g. 192.168.1.100, 9.9.9.9)"
+    if (-not ($ip -match '^[\da-fA-F\.\:]+$')) { Write-Host "  $(C 'R' 'Invalid IP format.')"; return }
+    Write-Host "  $(C 'C' "Benchmarking $ip ...")"
+    $cTarg = @(@{Name="[CUSTOM] $ip"; IP=$ip; IPv6=""; Category="Custom"; DoH=""; DoT=""; ECS=$false})
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $cRes = Invoke-BenchmarkEngine -Targets $cTarg
+    $sw.Stop(); $c = $cRes[0]
+    Write-Host "`n  $(C 'BOLD' '── Results ──')"
+    Write-Host "  $(C 'G' "Ping:   ") $(if ($c.PingAvg -eq [double]::MaxValue) {'FAIL'} else {"$([math]::Round($c.PingAvg,1))ms (Jitter: $([math]::Round($c.Jitter,1))ms)"})"
+    Write-Host "  $(C 'G' "DNS:    ") $(if ($c.DnsTime -eq [double]::MaxValue) {'FAIL'} else {"$([math]::Round($c.DnsTime,1))ms"})"
+    Write-Host "  $(C 'G' "Loss:   ") $([math]::Round($c.Loss,1))%"
+    Write-Host "  $(C 'G' "Hijack: ") $(if ($c.Hijacked) {$(C 'R' 'YES')} else {'No'})"
+    $best = $Results | Where-Object { $_.Status -eq 'OK' } | Select-Object -First 1
+    if ($best -and $c.Status -eq 'OK') {
+        Write-Host "`n  $(C 'BOLD' '── vs #1 Global Provider ──')"
+        Write-Host "  $(C 'Y' ('{0,-28} {1,-10} {2,-10}' -f $best.Name, "$([math]::Round($best.PingAvg,1))ms", "$([math]::Round($best.DnsTime,1))ms"))"
+        Write-Host "  $(C 'C' ('{0,-28} {1,-10} {2,-10}' -f $c.Name, "$([math]::Round($c.PingAvg,1))ms", "$([math]::Round($c.DnsTime,1))ms"))"
+        $pDiff = [math]::Round($c.PingAvg - $best.PingAvg, 1); $dDiff = [math]::Round($c.DnsTime - $best.DnsTime, 1)
+        Write-Host "  $(C 'DG' ('{0,-28} {1,-10} {2,-10}' -f 'Difference:', $(if ($pDiff -gt 0) {"+${pDiff}ms"} else {"$pDiff"}), $(if ($dDiff -gt 0) {"+${dDiff}ms"} else {"$dDiff"})))"
+    }
+    if ($c.Status -eq 'OK' -and (Read-Host "`n  Apply custom DNS? (y/N)") -match '^y$') { Set-Dns -Primary $c.IP -Category 'Custom' }
+}
+
+
+
 
 # ── Interactive Menu ─────────────────────────────────────────────────────────
 function Show-Menu {
@@ -963,6 +1058,9 @@ function Show-Menu {
         Write-Host (MR " $(C 'C' '13.') Compare Active ISP DNS vs Top Providers" 44)
         Write-Host (MR " $(C 'M' '14.') Enable Windows Native DNS-over-HTTPS (DoH)" 48)
         Write-Host (MR " $(C 'Y' '15.') Network Bufferbloat & Response Sanity Test" 47)
+        Write-Host (MR " $(C 'C' '16.') Trace Edge Gateway & Route Hops (Visual Traceroute)" 56)
+        Write-Host (MR " $(C 'M' '17.') Inspect Active DNS Client Cache & TTL" 42)
+        Write-Host (MR " $(C 'Y' '18.') Benchmark Custom Resolver / Local Pi-hole" 46)
         Write-Host "  $(C 'C' '├──────────────────────────────────────────────────────────────┤')"
         Write-Host (MR "$(C 'DG' '[ MANAGEMENT & TELEMETRY ]')" 26)
         Write-Host (MR " $(C 'M' '9.') Restore Previous DNS from Backup" 35)
@@ -1078,6 +1176,9 @@ function Show-Menu {
             '13' { Compare-ActiveISP -Results $Results }
             '14' { Enable-WindowsNativeDoH }
             '15' { Test-Bufferbloat }
+            '16' { Trace-EdgeGateway }
+            '17' { Inspect-DnsCache }
+            '18' { Test-CustomDnsResolver -Results $Results }
             '0' { Write-Host "  $(C 'DG' 'Goodbye.')"; return }
             default { Write-Host "  $(C 'Y' 'Invalid choice.')" }
         }
@@ -1088,6 +1189,18 @@ function Show-Menu {
 function Main {
     Clear-Host
     Show-Banner
+
+    # Quick-switch: Reset mode needs no benchmark
+    if ($Mode -eq 'Reset') {
+        $adapter = Get-ActiveAdapter
+        if ($adapter) {
+            Backup-NetworkSettings | Out-Null
+            Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ResetServerAddresses
+            ipconfig /flushdns | Out-Null
+            Write-Host "  $(C 'G' 'Reset to DHCP successfully.')"
+        } else { Write-Host "  $(C 'R' 'No active adapter found.')" }
+        return
+    }
 
     Write-Host "  $(C 'C' 'Pre-flight check...')"
     $adapter = Get-ActiveAdapter
@@ -1127,7 +1240,37 @@ function Main {
     }
 
     Show-Table -Results $results
-    Show-Menu -Results $results -ElapsedSec $elapsed
+
+    # CLI quick-switch modes
+    switch ($Mode) {
+        'Fastest' {
+            $best = $results | Where-Object { $_.Status -eq 'OK' } | Select-Object -First 1
+            if ($best) {
+                $baseName = $best.Name -replace ' (Primary|Secondary|1|2|3|4)',''
+                $pair = $results | Where-Object { $_.Name -match [regex]::Escape($baseName) -and $_.IP -ne $best.IP -and $_.Status -eq 'OK' } | Select-Object -First 1
+                if (-not $pair) { $pair = $results | Where-Object { $_.Status -eq 'OK' -and $_.IP -ne $best.IP } | Select-Object -First 1 }
+                Set-Dns -Primary $best.IP -Secondary ($pair.IP) -Category 'Fastest'
+            }
+        }
+        'Gaming' {
+            $gPool = @($results | Where-Object { $_.Status -eq 'OK' -and $_.Loss -eq 0 -and $_.ECS -eq $true })
+            if ($gPool.Count -eq 0) { $gPool = @($results | Where-Object { $_.Status -eq 'OK' -and $_.Loss -eq 0 }) }
+            if ($gPool.Count -gt 0) {
+                $ranked = $gPool | ForEach-Object {
+                    $ep = if ($_.PingAvg -eq [double]::MaxValue) {999} else {$_.PingAvg}
+                    $ed = if ($_.DnsTime -eq [double]::MaxValue) {999} else {$_.DnsTime}
+                    $ej = if ($_.Jitter -eq 999) {999} else {$_.Jitter}
+                    $_ | Add-Member -NotePropertyName GamingScore -NotePropertyValue (($ep*0.4)+($ed*0.3)+($ej*0.3)) -PassThru -Force
+                } | Sort-Object GamingScore
+                $best = $ranked[0]
+                $pair = $ranked | Where-Object { $_.IP -ne $best.IP } | Select-Object -First 1
+                Set-Dns -Primary $best.IP -Secondary $(if ($pair) {$pair.IP} else {$null}) -Category 'Gaming'
+                Optimize-NetworkRegistry
+            }
+        }
+        'BenchmarkOnly' { return }
+        default { Show-Menu -Results $results -ElapsedSec $elapsed }
+    }
 }
 
 Main
