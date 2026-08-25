@@ -639,8 +639,10 @@ function Optimize-MTU {
     try {
         netsh int ipv4 set subinterface "$($adapter.Name)" mtu=$optMtu store=persistent | Out-Null
         Write-Host "  $(C 'G' "Successfully applied MTU $optMtu to adapter $($adapter.Name).")"
+        return $optMtu
     } catch {
         Write-Host "  $(C 'R' "Failed to apply MTU: $_")"
+        return $null
     }
 }
 

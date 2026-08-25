@@ -64,6 +64,20 @@ try {
     $ConsoleOutput.Text += "[$(Get-Date -Format 'HH:mm:ss')] Pre-flight error: $_`n"
 }
 
+# ── Helper: run a script string in a fresh PowerShell instance on the calling thread ──
+function Invoke-InBackendRunspace {
+    param([string]$BaseScript, [string]$Command)
+    $psw = [PowerShell]::Create().AddScript($BaseScript)
+    $psw.Invoke() | Out-Null
+    $psw.Commands.Clear()
+    $result = $psw.AddScript($Command).Invoke()
+    $psw.Dispose()
+    return $result
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BtnRunBenchmark - Main benchmark with live progress
+# ══════════════════════════════════════════════════════════════════════════════
 $BtnRunBenchmark.Add_Click({
     Log-Message "Starting Benchmark..."
     $BtnRunBenchmark.IsEnabled = $false
@@ -71,21 +85,32 @@ $BtnRunBenchmark.Add_Click({
 
     $worker = New-Object System.ComponentModel.BackgroundWorker
     $worker.WorkerReportsProgress = $true
-    
+
     $worker.add_DoWork({
         param($s, $e)
+        $bmScript = $e.Argument
         try {
-            $psWorker = [PowerShell]::Create().AddScript($benchmarkScript)
+            # Load all functions and variables from dns_benchmark.ps1
+            $psWorker = [PowerShell]::Create().AddScript($bmScript)
             $psWorker.Invoke()
-            
-            $targets = $psWorker.Runspace.SessionStateProxy.GetVariable("DnsProviders")
+
+            # Retrieve DnsProviders from the loaded script's session
+            $psWorker.Commands.Clear()
+            $targets = @($psWorker.AddScript('$script:DnsProviders').Invoke())
+
+            if (-not $targets -or $targets.Count -eq 0) {
+                $e.Result = @()
+                $psWorker.Dispose()
+                return
+            }
+
             $timeout = 800
             $icmp = 4
-            
+
             $pool = [RunspaceFactory]::CreateRunspacePool(1, [Math]::Min($targets.Count, 128))
             $pool.Open()
-            
-            # The async logic from Invoke-BenchmarkEngine adapted for background worker
+
+            # Self-contained benchmark scriptblock for each DNS provider
             $scriptBlock = {
                 param($IP, $DoH, $DoT, $ECS, $TimeoutMs, $IcmpCount)
                 $pinger = New-Object System.Net.NetworkInformation.Ping
@@ -99,7 +124,7 @@ $BtnRunBenchmark.Add_Click({
                     } catch { $lost++ }
                 }
                 $pinger.Dispose()
-                
+
                 $pingAvg = if ($icmpTimes.Count -gt 0) { ($icmpTimes | Measure-Object -Average).Average } else { [double]::MaxValue }
                 $pingJitter = if ($icmpTimes.Count -gt 0) { ($icmpTimes | Measure-Object -Maximum).Maximum - ($icmpTimes | Measure-Object -Minimum).Minimum } else { 999 }
                 $lossPct = [math]::Round(($lost / $IcmpCount) * 100, 1)
@@ -131,11 +156,11 @@ $BtnRunBenchmark.Add_Click({
                         $ep = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
                         $res = $udp.Receive([ref]$ep)
                         $udp.Close()
-                        
+
                         $rcode = $res[3] -band 0x0F
                         $ansCount = ($res[6] -shl 8) -bor $res[7]
                         $dnssec = ($res[3] -band 0x20) -eq 0x20
-                        
+
                         return @{ Time=$sw.Elapsed.TotalMilliseconds; RCode=$rcode; AnsCount=$ansCount; DNSSEC=$dnssec }
                     } catch {
                         try { $udp.Close() } catch {}
@@ -184,20 +209,20 @@ $BtnRunBenchmark.Add_Click({
                     if ($j.Handle.IsCompleted) { $completed += $j } else { $incomplete += $j }
                 }
                 $jobs = $incomplete
-                
+
                 foreach ($j in $completed) {
                     $res = $null
                     try {
                         $rawRes = $j.Pipe.EndInvoke($j.Handle)
                         if ($rawRes.Count -gt 0) { $res = $rawRes[0] }
                     } catch {}
-                    
+
                     if (-not ($res -and $res.IP)) {
                         $res = @{ IP = $j.P.IP; DoH = ($j.P.DoH -ne ""); DoT = ($j.P.DoT -ne ""); ECS = $j.P.ECS; PingAvg = [double]::MaxValue; PingJitter = 999; Loss = 100.0; DnsAvg = [double]::MaxValue; DnsFailed = $true; Hijacked = $false; DNSSEC = $false }
                     }
                     $j.Pipe.Dispose()
                     $done++
-                    
+
                     $pct = [math]::Floor(($done / $total) * 100)
                     $s.ReportProgress($pct)
 
@@ -207,7 +232,7 @@ $BtnRunBenchmark.Add_Click({
                     elseif ($res.Loss -gt 25) { $status = 'HIGH LOSS' }
                     elseif ($res.DnsFailed) { $status = 'DNS FAIL' }
                     elseif ($res.Hijacked) { $status = 'HIJACKED' }
-                    
+
                     if ($status -eq 'OK' -or $status -eq 'HIJACKED' -or $status -eq 'HIGH LOSS') {
                         $effPing = if ($res.PingAvg -eq [double]::MaxValue) { 999 } else { $res.PingAvg }
                         $effDns = if ($res.DnsAvg -eq [double]::MaxValue) { 999 } else { $res.DnsAvg }
@@ -236,13 +261,14 @@ $BtnRunBenchmark.Add_Click({
             }
             $pool.Close()
             $pool.Dispose()
-            
+            $psWorker.Dispose()
+
             $e.Result = $results | Sort-Object Score
         } catch {
             $e.Result = $_
         }
     })
-    
+
     $worker.add_ProgressChanged({
         param($s, $e)
         $window.Dispatcher.Invoke([action]{
@@ -254,28 +280,29 @@ $BtnRunBenchmark.Add_Click({
         param($s, $e)
         $window.Dispatcher.Invoke([action]{
             $BtnRunBenchmark.IsEnabled = $true
+            $ProgBar.Value = 100
             if ($e.Result -is [System.Management.Automation.ErrorRecord] -or $e.Result -is [System.Exception]) {
-                Log-Message "Error running benchmark: $($e.Result.Exception.Message)"
+                Log-Message "Error running benchmark: $($e.Result)"
                 return
             }
-            
+
             $results = $e.Result
             $uiList = New-Object System.Collections.ArrayList
             $rank = 1
-            
+
             $bestPing = [double]::MaxValue
             $bestDns = [double]::MaxValue
-            
+
             foreach ($r in $results) {
                 if ($r.PingAvg -lt $bestPing -and $r.PingAvg -ne [double]::MaxValue) { $bestPing = $r.PingAvg }
                 if ($r.DnsTime -lt $bestDns -and $r.DnsTime -ne [double]::MaxValue) { $bestDns = $r.DnsTime }
-                
+
                 $badges = @()
                 if ($r.DoH) { $badges += "DoH" }
                 if ($r.DoT) { $badges += "DoT" }
                 if ($r.ECS) { $badges += "ECS" }
                 if ($r.DNSSEC) { $badges += "SEC" }
-                
+
                 [void]$uiList.Add([PSCustomObject]@{
                     Rank = $rank
                     Name = $r.Name
@@ -291,45 +318,55 @@ $BtnRunBenchmark.Add_Click({
                 })
                 $rank++
             }
-            
+
             $DnsDataGrid.ItemsSource = $uiList
-            
+
+            # Update metric cards
             if ($results.Count -gt 0) {
-                $StatTopDns.Text = $results[0].Name
+                $StatTopDns.Text = "$($results[0].Name) ($($results[0].IP))"
             }
             $StatLowestPing.Text = if ($bestPing -eq [double]::MaxValue) { "---" } else { "$([math]::Round($bestPing,1))" }
             $StatDnsResolve.Text = if ($bestDns -eq [double]::MaxValue) { "---" } else { "$([math]::Round($bestDns,1))" }
-            
+
             Log-Message "Benchmark Complete. Found $($results.Count) results."
         })
     })
 
-    $worker.RunWorkerAsync()
+    $worker.RunWorkerAsync($benchmarkScript)
 })
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BtnAutoMtu - MTU detection in background
+# ══════════════════════════════════════════════════════════════════════════════
 $BtnAutoMtu.Add_Click({
     Log-Message "Starting Auto MTU detection..."
     $worker = New-Object System.ComponentModel.BackgroundWorker
     $worker.add_DoWork({
         param($s, $e)
+        $bmScript = $e.Argument
         try {
-            $psWorker = [PowerShell]::Create().AddScript($benchmarkScript)
+            $psWorker = [PowerShell]::Create().AddScript($bmScript)
             $psWorker.Invoke()
             $psWorker.Commands.Clear()
-            $psWorker.AddScript("Optimize-MTU").Invoke()
-            $e.Result = "Check logs"
+            $mtuResult = $psWorker.AddScript("Optimize-MTU").Invoke()
+            # Optimize-MTU returns $optMtu (int) on success
+            $mtuVal = $mtuResult | Where-Object { $_ -is [int] -or $_ -match '^\d+$' } | Select-Object -Last 1
+            $e.Result = if ($mtuVal) { [string]$mtuVal } else { "Done" }
         } catch { $e.Result = "Error" } finally { if ($psWorker) { $psWorker.Dispose() } }
     })
     $worker.add_RunWorkerCompleted({
         param($s, $e)
         $window.Dispatcher.Invoke([action]{
-            $StatMtu.Text = "Done"
-            Log-Message "MTU Optimization script executed."
+            $StatMtu.Text = $e.Result
+            Log-Message "MTU detection complete: $($e.Result)"
         })
     })
-    $worker.RunWorkerAsync()
+    $worker.RunWorkerAsync($benchmarkScript)
 })
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BtnResetDhcp
+# ══════════════════════════════════════════════════════════════════════════════
 $BtnResetDhcp.Add_Click({
     Log-Message "Resetting to DHCP..."
     try {
@@ -349,6 +386,9 @@ $BtnResetDhcp.Add_Click({
     } finally { if ($psWorker) { $psWorker.Dispose() } }
 })
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BtnOptimizeTcp
+# ══════════════════════════════════════════════════════════════════════════════
 $BtnOptimizeTcp.Add_Click({
     Log-Message "Applying TCP/Registry Optimizations..."
     try {
@@ -362,28 +402,34 @@ $BtnOptimizeTcp.Add_Click({
     } finally { if ($psWorker) { $psWorker.Dispose() } }
 })
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BtnTestGames - Game latency test in background
+# ══════════════════════════════════════════════════════════════════════════════
 $BtnTestGames.Add_Click({
     Log-Message "Testing Game Servers..."
     $worker = New-Object System.ComponentModel.BackgroundWorker
     $worker.add_DoWork({
         param($s, $e)
+        $bmScript = $e.Argument
         try {
-            $psWorker = [PowerShell]::Create().AddScript($benchmarkScript)
+            $psWorker = [PowerShell]::Create().AddScript($bmScript)
             $psWorker.Invoke()
             $psWorker.Commands.Clear()
             $psWorker.AddScript("Test-GameServerRouting").Invoke()
-        } catch { Log-Message "Error: $_" } finally { if ($psWorker) { $psWorker.Dispose() } }
+        } catch {} finally { if ($psWorker) { $psWorker.Dispose() } }
     })
     $worker.add_RunWorkerCompleted({
         param($s, $e)
         $window.Dispatcher.Invoke([action]{
-            Log-Message "Game Servers Test script finished (results may be in main console output)."
+            Log-Message "Game server latency test finished."
         })
     })
-    $worker.RunWorkerAsync()
+    $worker.RunWorkerAsync($benchmarkScript)
 })
 
-# Export missing Apply bindings
+# ══════════════════════════════════════════════════════════════════════════════
+# BtnApplyFastest
+# ══════════════════════════════════════════════════════════════════════════════
 $BtnApplyFastest.Add_Click({
     if ($DnsDataGrid.Items.Count -gt 0) {
         $first = $DnsDataGrid.Items[0]
@@ -395,9 +441,12 @@ $BtnApplyFastest.Add_Click({
             $psWorker.AddScript("Set-Dns -Primary '$($first.IP)' -Secondary '' -Category '$($first.Category)'").Invoke()
             Log-Message "Applied."
         } catch { Log-Message "Error: $_" } finally { if ($psWorker) { $psWorker.Dispose() } }
-    }
+    } else { Log-Message "Run benchmark first." }
 })
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BtnApplyAdblock
+# ══════════════════════════════════════════════════════════════════════════════
 $BtnApplyAdblock.Add_Click({
     $adblock = $null
     foreach ($item in $DnsDataGrid.Items) {
@@ -415,6 +464,9 @@ $BtnApplyAdblock.Add_Click({
     } else { Log-Message "Run benchmark first." }
 })
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BtnApplyPrivacy
+# ══════════════════════════════════════════════════════════════════════════════
 $BtnApplyPrivacy.Add_Click({
     $priv = $null
     foreach ($item in $DnsDataGrid.Items) {
@@ -432,19 +484,21 @@ $BtnApplyPrivacy.Add_Click({
     } else { Log-Message "Run benchmark first." }
 })
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BtnExport
+# ══════════════════════════════════════════════════════════════════════════════
 $BtnExport.Add_Click({
     Log-Message "Exporting telemetry..."
     try {
         $psWorker = [PowerShell]::Create().AddScript($benchmarkScript)
         $psWorker.Invoke()
-        
+
         $results = $DnsDataGrid.ItemsSource
         if (-not $results) {
             Log-Message "No results to export. Run benchmark first."
             return
         }
-        
-        # pass dummy array list to Export-Telemetry
+
         $psWorker.Runspace.SessionStateProxy.SetVariable("exportResults", $results)
         $psWorker.Commands.Clear()
         $psWorker.AddScript("Export-Telemetry -Results `$exportResults -ElapsedSec 0").Invoke()
@@ -452,6 +506,9 @@ $BtnExport.Add_Click({
     } catch { Log-Message "Error: $_" } finally { if ($psWorker) { $psWorker.Dispose() } }
 })
 
+# ══════════════════════════════════════════════════════════════════════════════
+# DataGrid double-click to apply selected DNS
+# ══════════════════════════════════════════════════════════════════════════════
 $DnsDataGrid.Add_MouseDoubleClick({
     if ($DnsDataGrid.SelectedItem) {
         $item = $DnsDataGrid.SelectedItem
