@@ -822,18 +822,25 @@ function Show-Menu {
         Write-Host "  $(C 'C' '┌──────────────────────────────────────────────────────────────┐')"
         Write-Host "  $(C 'C' '│')  $(C 'BOLD' 'GOD-MODE ACTION MENU')          Adapter: $(C 'Y' $aName)"
         Write-Host "  $(C 'C' '├──────────────────────────────────────────────────────────────┤')"
+        Write-Host "  $(C 'C' '│')  $(C 'DG' '[ DNS PROFILES ]')                                       $(C 'C' '│')"
         Write-Host "  $(C 'C' '│')  $(C 'G' '1.') Apply #1 Fastest DNS Pair (IPv4+IPv6)               $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'G' '2.') Apply Best AdBlock DNS Pair                         $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'G' '3.') Apply Best Privacy DNS Pair                         $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'C' '4.') Select custom provider from ranking                 $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'M' '5.') Restore Previous DNS from Backup                    $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'Y' '6.') Reset to Default DHCP (ISP)                         $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'M' '7.') Run Windows DNS Cache & TCP Latency Tuning          $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'B' '8.') Export Full Telemetry (CSV, JSON, Markdown Report)   $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'G' '10') Test Game Server Routing (SEA Latency)              $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'G' '11') Auto-Detect & Apply Optimal MTU                     $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'Y' '12') Apply Best Gaming DNS (ECS + Low Jitter)            $(C 'C' '│')"
-        Write-Host "  $(C 'C' '│')  $(C 'DG' '9.') Exit                                                $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'G' '2.') Apply Best Gaming DNS (ECS + Low Jitter)            $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'G' '3.') Apply Best AdBlock DNS Pair                         $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'G' '4.') Apply Best Privacy DNS Pair                         $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'C' '5.') Select Custom Provider from Ranking                 $(C 'C' '│')"
+        Write-Host "  $(C 'C' '├──────────────────────────────────────────────────────────────┤')"
+        Write-Host "  $(C 'C' '│')  $(C 'DG' '[ NETWORK & LATENCY TUNING ]')                           $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'G' '6.') Auto-Detect & Apply Optimal MTU                     $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'M' '7.') Run Windows DNS Cache, TCP & NIC Hardware Tuning    $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'Y' '8.') Test Game Server Routing (SEA Latency)              $(C 'C' '│')"
+        Write-Host "  $(C 'C' '├──────────────────────────────────────────────────────────────┤')"
+        Write-Host "  $(C 'C' '│')  $(C 'DG' '[ MANAGEMENT & TELEMETRY ]')                             $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'M' '9.') Restore Previous DNS from Backup                    $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'Y' '10.') Reset to Default DHCP (ISP)                        $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'B' '11.') Export Full Telemetry (CSV, JSON, Markdown Report) $(C 'C' '│')"
+        Write-Host "  $(C 'C' '├──────────────────────────────────────────────────────────────┤')"
+        Write-Host "  $(C 'C' '│')  $(C 'DG' '[ EXIT ]')                                               $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'DG' '0.') Exit                                                $(C 'C' '│')"
         Write-Host "  $(C 'C' '└──────────────────────────────────────────────────────────────┘')"
         $c = Read-Host "  Select option"
 
@@ -848,58 +855,6 @@ function Show-Menu {
                 } else { Write-Host "  $(C 'R' 'No viable DNS found.')" }
             }
             '2' {
-                $best = $Results | Where-Object { $_.Status -eq 'OK' -and $_.Category -eq 'AdBlock' } | Select-Object -First 1
-                if ($best) {
-                    $baseName = $best.Name -replace ' (Primary|Secondary)',''
-                    $pair = $Results | Where-Object { $_.Name -match [regex]::Escape($baseName) -and $_.IP -ne $best.IP -and $_.Status -eq 'OK' } | Select-Object -First 1
-                    if (-not $pair) { $pair = $Results | Where-Object { $_.Status -eq 'OK' -and $_.Category -eq 'AdBlock' -and $_.IP -ne $best.IP } | Select-Object -First 1 }
-                    if (-not $pair) { $pair = $Results | Where-Object { $_.Status -eq 'OK' -and $_.IP -ne $best.IP } | Select-Object -First 1 }
-                    Set-Dns -Primary $best.IP -Secondary ($pair.IP) -Category 'AdBlock'
-                } else { Write-Host "  $(C 'R' 'No viable AdBlock DNS found.')" }
-            }
-            '3' {
-                $best = $Results | Where-Object { $_.Status -eq 'OK' -and $_.Category -eq 'Privacy' } | Select-Object -First 1
-                if ($best) {
-                    $baseName = $best.Name -replace ' (Primary|Secondary)',''
-                    $pair = $Results | Where-Object { $_.Name -match [regex]::Escape($baseName) -and $_.IP -ne $best.IP -and $_.Status -eq 'OK' } | Select-Object -First 1
-                    if (-not $pair) { $pair = $Results | Where-Object { $_.Status -eq 'OK' -and $_.Category -eq 'Privacy' -and $_.IP -ne $best.IP } | Select-Object -First 1 }
-                    if (-not $pair) { $pair = $Results | Where-Object { $_.Status -eq 'OK' -and $_.IP -ne $best.IP } | Select-Object -First 1 }
-                    Set-Dns -Primary $best.IP -Secondary ($pair.IP) -Category 'Privacy'
-                } else { Write-Host "  $(C 'R' 'No viable Privacy DNS found.')" }
-            }
-            '4' {
-                $viable = @($Results | Where-Object { $_.Status -eq 'OK' })
-                Write-Host ""
-                for ($i = 0; $i -lt [Math]::Min($viable.Count, 25); $i++) {
-                    Write-Host "    $(C 'C' ($i+1)). $($viable[$i].Name) ($($viable[$i].IP))"
-                }
-                $sel = Read-Host "  Enter number"
-                $idx = $sel -as [int]
-                if ($null -eq $idx -or $idx -lt 1 -or $idx -gt $viable.Count) {
-                    Write-Host "  $(C 'R' 'Invalid selection.')"
-                } else {
-                    $idx = $idx - 1
-                    $best = $viable[$idx]
-                    $baseName = $best.Name -replace ' (Primary|Secondary|1|2|3|4)',''
-                    $pair = $viable | Where-Object { $_.Name -match [regex]::Escape($baseName) -and $_.IP -ne $best.IP } | Select-Object -First 1
-                    if (-not $pair) { $pair = $viable | Where-Object { $_.IP -ne $best.IP } | Select-Object -First 1 }
-                    Set-Dns -Primary $best.IP -Secondary ($pair.IP) -Category 'Custom'
-                }
-            }
-            '5' { Restore-NetworkSettings }
-            '6' {
-                if ($aName -ne 'NONE DETECTED') {
-                    Backup-NetworkSettings | Out-Null
-                    Set-DnsClientServerAddress -InterfaceAlias $aName -ResetServerAddresses
-                    ipconfig /flushdns | Out-Null
-                    Write-Host "  $(C 'G' 'Reset to DHCP successfully.')"
-                }
-            }
-            '7' { Optimize-NetworkRegistry }
-            '8' { Export-Telemetry -Results $Results -ElapsedSec $ElapsedSec }
-            '10' { Test-GameServerRouting }
-            '11' { Optimize-MTU }
-            '12' {
                 # Gaming DNS: ECS + 0% loss + weighted score (40% PingAvg, 30% DnsTime, 30% Jitter)
                 $gamingPool = @($Results | Where-Object { $_.Status -eq 'OK' -and $_.Loss -eq 0 -and $_.ECS -eq $true })
                 if ($gamingPool.Count -eq 0) {
@@ -937,7 +892,59 @@ function Show-Menu {
                     Optimize-NetworkRegistry
                 }
             }
-            '9' { Write-Host "  $(C 'DG' 'Goodbye.')"; return }
+            '3' {
+                $best = $Results | Where-Object { $_.Status -eq 'OK' -and $_.Category -eq 'AdBlock' } | Select-Object -First 1
+                if ($best) {
+                    $baseName = $best.Name -replace ' (Primary|Secondary)',''
+                    $pair = $Results | Where-Object { $_.Name -match [regex]::Escape($baseName) -and $_.IP -ne $best.IP -and $_.Status -eq 'OK' } | Select-Object -First 1
+                    if (-not $pair) { $pair = $Results | Where-Object { $_.Status -eq 'OK' -and $_.Category -eq 'AdBlock' -and $_.IP -ne $best.IP } | Select-Object -First 1 }
+                    if (-not $pair) { $pair = $Results | Where-Object { $_.Status -eq 'OK' -and $_.IP -ne $best.IP } | Select-Object -First 1 }
+                    Set-Dns -Primary $best.IP -Secondary ($pair.IP) -Category 'AdBlock'
+                } else { Write-Host "  $(C 'R' 'No viable AdBlock DNS found.')" }
+            }
+            '4' {
+                $best = $Results | Where-Object { $_.Status -eq 'OK' -and $_.Category -eq 'Privacy' } | Select-Object -First 1
+                if ($best) {
+                    $baseName = $best.Name -replace ' (Primary|Secondary)',''
+                    $pair = $Results | Where-Object { $_.Name -match [regex]::Escape($baseName) -and $_.IP -ne $best.IP -and $_.Status -eq 'OK' } | Select-Object -First 1
+                    if (-not $pair) { $pair = $Results | Where-Object { $_.Status -eq 'OK' -and $_.Category -eq 'Privacy' -and $_.IP -ne $best.IP } | Select-Object -First 1 }
+                    if (-not $pair) { $pair = $Results | Where-Object { $_.Status -eq 'OK' -and $_.IP -ne $best.IP } | Select-Object -First 1 }
+                    Set-Dns -Primary $best.IP -Secondary ($pair.IP) -Category 'Privacy'
+                } else { Write-Host "  $(C 'R' 'No viable Privacy DNS found.')" }
+            }
+            '5' {
+                $viable = @($Results | Where-Object { $_.Status -eq 'OK' })
+                Write-Host ""
+                for ($i = 0; $i -lt [Math]::Min($viable.Count, 25); $i++) {
+                    Write-Host "    $(C 'C' ($i+1)). $($viable[$i].Name) ($($viable[$i].IP))"
+                }
+                $sel = Read-Host "  Enter number"
+                $idx = $sel -as [int]
+                if ($null -eq $idx -or $idx -lt 1 -or $idx -gt $viable.Count) {
+                    Write-Host "  $(C 'R' 'Invalid selection.')"
+                } else {
+                    $idx = $idx - 1
+                    $best = $viable[$idx]
+                    $baseName = $best.Name -replace ' (Primary|Secondary|1|2|3|4)',''
+                    $pair = $viable | Where-Object { $_.Name -match [regex]::Escape($baseName) -and $_.IP -ne $best.IP } | Select-Object -First 1
+                    if (-not $pair) { $pair = $viable | Where-Object { $_.IP -ne $best.IP } | Select-Object -First 1 }
+                    Set-Dns -Primary $best.IP -Secondary ($pair.IP) -Category 'Custom'
+                }
+            }
+            '6' { Optimize-MTU }
+            '7' { Optimize-NetworkRegistry }
+            '8' { Test-GameServerRouting }
+            '9' { Restore-NetworkSettings }
+            '10' {
+                if ($aName -ne 'NONE DETECTED') {
+                    Backup-NetworkSettings | Out-Null
+                    Set-DnsClientServerAddress -InterfaceAlias $aName -ResetServerAddresses
+                    ipconfig /flushdns | Out-Null
+                    Write-Host "  $(C 'G' 'Reset to DHCP successfully.')"
+                }
+            }
+            '11' { Export-Telemetry -Results $Results -ElapsedSec $ElapsedSec }
+            '0' { Write-Host "  $(C 'DG' 'Goodbye.')"; return }
             default { Write-Host "  $(C 'Y' 'Invalid choice.')" }
         }
     }
