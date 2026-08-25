@@ -55,6 +55,10 @@ $script:DnsProviders = @(
     @{Name="Hurricane Electric";     IP="74.82.42.42";     IPv6="2001:470:20::2";       Category="Fast";  DoH="";                                     DoT="";                   ECS=$false}
     @{Name="Level3/Lumen 1";         IP="4.2.2.1";         IPv6="2001:428::1";          Category="Fast";  DoH="";                                     DoT="";                   ECS=$false}
     @{Name="Level3/Lumen 2";         IP="4.2.2.2";         IPv6="2001:428::2";          Category="Fast";  DoH="";                                     DoT="";                   ECS=$false}
+    @{Name="RethinkDNS Fast";        IP="104.28.1.1";      IPv6="2606:4700:300a::1";    Category="Fast";  DoH="https://max.rethinkdns.com/dns-query"; DoT="max.rethinkdns.com"; ECS=$true}
+    @{Name="IIJ Public DNS";         IP="210.130.1.1";     IPv6="2001:240:bb5f::1";     Category="Fast";  DoH="";                                     DoT="";                   ECS=$true}
+    @{Name="Comcast Business 1";     IP="75.75.75.75";     IPv6="2001:558:feed::1";     Category="Fast";  DoH="";                                     DoT="";                   ECS=$true}
+    @{Name="Comcast Business 2";     IP="75.75.76.76";     IPv6="2001:558:feed::2";     Category="Fast";  DoH="";                                     DoT="";                   ECS=$true}
 
     # Privacy & Security
     @{Name="Quad9 Primary";          IP="9.9.9.9";         IPv6="2620:fe::fe";          Category="Privacy"; DoH="https://dns.quad9.net/dns-query";    DoT="dns.quad9.net";      ECS=$false}
@@ -63,6 +67,9 @@ $script:DnsProviders = @(
     @{Name="Mullvad DNS";            IP="194.242.2.2";     IPv6="2a07:e340::2";         Category="Privacy"; DoH="https://doh.mullvad.net/dns-query";  DoT="doh.mullvad.net";    ECS=$false}
     @{Name="CleanBrowsing Security"; IP="185.228.168.9";   IPv6="2a0d:2a00:1::2";       Category="Privacy"; DoH="https://doh.cleanbrowsing.org/doh/security-filter/"; DoT="security-filter-dns.cleanbrowsing.org"; ECS=$false}
     @{Name="Neustar/UltraDNS";      IP="64.6.64.6";       IPv6="2620:74:1b::1:1";      Category="Privacy"; DoH="";                                   DoT="";                   ECS=$false}
+    @{Name="Digitale Gesellschaft"; IP="185.95.218.42";   IPv6="2a05:fc84::42";        Category="Privacy"; DoH="https://dns.digitale-gesellschaft.ch/dns-query"; DoT="dns.digitale-gesellschaft.ch"; ECS=$false}
+    @{Name="Applied Privacy";       IP="146.255.56.98";   IPv6="2a02:418:6a04:500::1"; Category="Privacy"; DoH="https://doh.applied-privacy.net/query"; DoT="dot.applied-privacy.net"; ECS=$false}
+    @{Name="LibreDNS";              IP="116.202.176.26";  IPv6="2a01:4f8:1c1c:6b4b::1"; Category="Privacy"; DoH="https://doh.libredns.gr/dns-query";  DoT="dot.libredns.gr";    ECS=$false}
 
     # AdBlock & Tracker Filtering
     @{Name="AdGuard Primary";        IP="94.140.14.14";    IPv6="2a10:50c0::ad1:ff";    Category="AdBlock"; DoH="https://dns.adguard-dns.com/dns-query"; DoT="dns.adguard-dns.com"; ECS=$false}
@@ -72,6 +79,10 @@ $script:DnsProviders = @(
     @{Name="NextDNS Secondary";      IP="45.90.30.0";      IPv6="2a07:a8c1::";          Category="AdBlock"; DoH="https://dns.nextdns.io";               DoT="";                   ECS=$true}
     @{Name="Control D Primary";      IP="76.76.2.0";       IPv6="2606:1a40::";          Category="AdBlock"; DoH="https://freedns.controld.com/p0";      DoT="";                   ECS=$false}
     @{Name="Control D Secondary";    IP="76.76.10.0";      IPv6="2606:1a40:1::";        Category="AdBlock"; DoH="https://freedns.controld.com/p0";      DoT="";                   ECS=$false}
+    @{Name="AdGuard Family 1";      IP="94.140.14.15";    IPv6="2a10:50c0::bad1:ff";   Category="AdBlock"; DoH="https://family.adguard-dns.com/dns-query"; DoT="family.adguard-dns.com"; ECS=$false}
+    @{Name="AdGuard Family 2";      IP="94.140.15.16";    IPv6="2a10:50c0::bad2:ff";   Category="AdBlock"; DoH="https://family.adguard-dns.com/dns-query"; DoT="family.adguard-dns.com"; ECS=$false}
+    @{Name="AhaDNS India";          IP="144.24.111.139";  IPv6="2603:c020:6:5000::1";  Category="AdBlock"; DoH="https://doh.ahadns.net/in";                DoT="in.ahadns.net";     ECS=$false}
+    @{Name="DNSForge";              IP="176.9.93.198";    IPv6="2a01:4f8:151:34aa::198"; Category="AdBlock"; DoH="https://dnsforge.de/dns-query";          DoT="dnsforge.de";       ECS=$false}
 
     # Regional & Global
     @{Name="AliDNS Primary";         IP="223.5.5.5";       IPv6="2400:3200::1";         Category="Global";  DoH="https://dns.alidns.com/dns-query";   DoT="dns.alidns.com";     ECS=$true}
@@ -79,6 +90,11 @@ $script:DnsProviders = @(
     @{Name="Tencent DNSPod";         IP="119.29.29.29";    IPv6="2402:4e00::";          Category="Global";  DoH="";                                   DoT="";                   ECS=$true}
     @{Name="Baidu DNS";              IP="180.76.76.76";    IPv6="2400:da00::6666";      Category="Global";  DoH="";                                   DoT="";                   ECS=$true}
     @{Name="Alternate DNS Primary";  IP="76.76.19.19";     IPv6="2602:fcbc::ad";        Category="Global";  DoH="https://dns.alternate-dns.com/dns-query"; DoT="";              ECS=$false}
+    @{Name="114DNS Primary";         IP="114.114.114.114"; IPv6="";                     Category="Global";  DoH="";                                   DoT="";                   ECS=$true}
+    @{Name="114DNS Secondary";       IP="114.114.115.115"; IPv6="";                     Category="Global";  DoH="";                                   DoT="";                   ECS=$true}
+    @{Name="360 Secure DNS";         IP="101.226.4.6";     IPv6="";                     Category="Global";  DoH="";                                   DoT="";                   ECS=$true}
+    @{Name="Chunghwa Telecom 1";     IP="168.95.1.1";      IPv6="2001:b000:168::1";     Category="Global";  DoH="";                                   DoT="";                   ECS=$true}
+    @{Name="Chunghwa Telecom 2";     IP="168.95.192.1";    IPv6="2001:b000:168::2";     Category="Global";  DoH="";                                   DoT="";                   ECS=$true}
 )
 
 # ── Banner ────────────────────────────────────────────────────────────────────
