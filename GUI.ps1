@@ -285,16 +285,21 @@ $BtnRunBenchmark.Add_Click({
                 if ($r.ECS) { $badges += "ECS" }
                 if ($r.DNSSEC) { $badges += "SEC" }
 
+                $pingTier = if ($r.PingAvg -eq [double]::MaxValue) { 'fail' } elseif ($r.PingAvg -lt 30) { 'good' } elseif ($r.PingAvg -lt 80) { 'mid' } else { 'high' }
+                $dnsTier = if ($r.DnsTime -eq [double]::MaxValue) { 'fail' } elseif ($r.DnsTime -lt 30) { 'good' } elseif ($r.DnsTime -lt 80) { 'mid' } else { 'high' }
+
                 [void]$uiList.Add([PSCustomObject]@{
                     Rank = $rank
                     Name = $r.Name
                     Category = $r.Category
                     IP = $r.IP
-                    Badges = $badges -join ","
+                    Badges = $badges -join " "
                     PingStr = if ($r.PingAvg -eq [double]::MaxValue) { 'N/A' } else { "$([math]::Round($r.PingAvg,1))ms" }
+                    PingTier = $pingTier
                     JitterStr = if ($r.Jitter -eq 999) { 'N/A' } else { "$([math]::Round($r.Jitter,1))ms" }
                     LossStr = "$($r.Loss)%"
                     DnsTimeStr = if ($r.DnsTime -eq [double]::MaxValue) { 'N/A' } else { "$([math]::Round($r.DnsTime,1))ms" }
+                    DnsTier = $dnsTier
                     ScoreStr = if ($r.Score -eq [double]::MaxValue) { '99999' } else { [math]::Round($r.Score, 1) }
                     Status = $r.Status
                 })

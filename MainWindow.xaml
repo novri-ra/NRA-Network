@@ -242,13 +242,78 @@
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="#" Binding="{Binding Rank}" Width="35"/>
                         <DataGridTextColumn Header="Provider" Binding="{Binding Name}" Width="*"/>
-                        <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="70"/>
+                        <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="70">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="FontWeight" Value="SemiBold"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Category}" Value="Fast">
+                                            <Setter Property="Foreground" Value="#89B4FA"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Category}" Value="AdBlock">
+                                            <Setter Property="Foreground" Value="#A6E3A1"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Category}" Value="Privacy">
+                                            <Setter Property="Foreground" Value="#F5C2E7"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Category}" Value="Malware">
+                                            <Setter Property="Foreground" Value="#CBA6F7"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Category}" Value="Global">
+                                            <Setter Property="Foreground" Value="#CBA6F7"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Category}" Value="Custom">
+                                            <Setter Property="Foreground" Value="#94E2D5"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
                         <DataGridTextColumn Header="IP" Binding="{Binding IP}" Width="115"/>
-                        <DataGridTextColumn Header="Badges" Binding="{Binding Badges}" Width="80"/>
-                        <DataGridTextColumn Header="Ping" Binding="{Binding PingStr}" Width="65"/>
+                        <DataGridTextColumn Header="Badges" Binding="{Binding Badges}" Width="80">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="#B4BEFE"/>
+                                    <Setter Property="FontWeight" Value="SemiBold"/>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                        <DataGridTextColumn Header="Ping" Binding="{Binding PingStr}" Width="65">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding PingTier}" Value="good">
+                                            <Setter Property="Foreground" Value="#A6E3A1"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding PingTier}" Value="mid">
+                                            <Setter Property="Foreground" Value="#FAB387"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding PingTier}" Value="high">
+                                            <Setter Property="Foreground" Value="#F38BA8"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
                         <DataGridTextColumn Header="Jitter" Binding="{Binding JitterStr}" Width="65"/>
                         <DataGridTextColumn Header="Loss" Binding="{Binding LossStr}" Width="55"/>
-                        <DataGridTextColumn Header="DNS" Binding="{Binding DnsTimeStr}" Width="70"/>
+                        <DataGridTextColumn Header="DNS" Binding="{Binding DnsTimeStr}" Width="70">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding DnsTier}" Value="good">
+                                            <Setter Property="Foreground" Value="#A6E3A1"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding DnsTier}" Value="mid">
+                                            <Setter Property="Foreground" Value="#FAB387"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding DnsTier}" Value="high">
+                                            <Setter Property="Foreground" Value="#F38BA8"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
                         <DataGridTextColumn Header="Score" Binding="{Binding ScoreStr}" Width="60"/>
                         <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="75">
                             <DataGridTextColumn.ElementStyle>
