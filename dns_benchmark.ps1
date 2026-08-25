@@ -426,16 +426,22 @@ function Restore-NetworkSettings {
         if ($backup.DHCP) {
             Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ResetServerAddresses
         } else {
-            if ($backup.IPv4 -and $backup.IPv4.Count -gt 0) {
-                Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses $backup.IPv4 -AddressFamily IPv4 -ErrorAction Stop
+            $restoreList = @()
+            if ($backup.IPv4 -and $backup.IPv4.Count -gt 0) { $restoreList += @($backup.IPv4) }
+            if ($backup.IPv6 -and $backup.IPv6.Count -gt 0) { $restoreList += @($backup.IPv6) }
+
+            if ($restoreList.Count -gt 0) {
+                try {
+                    Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses $restoreList -ErrorAction Stop
+                } catch {
+                    # netsh fallback
+                    if ($backup.IPv4 -and $backup.IPv4.Count -ge 1) { netsh interface ipv4 set dns name="$($adapter.Name)" source=static addr="$($backup.IPv4[0])" register=primary | Out-Null }
+                    if ($backup.IPv4 -and $backup.IPv4.Count -ge 2) { netsh interface ipv4 add dns name="$($adapter.Name)" addr="$($backup.IPv4[1])" index=2 | Out-Null }
+                    if ($backup.IPv6 -and $backup.IPv6.Count -ge 1) { netsh interface ipv6 set dns name="$($adapter.Name)" source=static addr="$($backup.IPv6[0])" | Out-Null }
+                    if ($backup.IPv6 -and $backup.IPv6.Count -ge 2) { netsh interface ipv6 add dns name="$($adapter.Name)" addr="$($backup.IPv6[1])" index=2 | Out-Null }
+                }
             } else {
-                Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ResetServerAddresses -AddressFamily IPv4
-            }
-            
-            if ($backup.IPv6 -and $backup.IPv6.Count -gt 0) {
-                Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses $backup.IPv6 -AddressFamily IPv6 -ErrorAction Stop
-            } else {
-                Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ResetServerAddresses -AddressFamily IPv6
+                Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ResetServerAddresses
             }
         }
         
@@ -462,24 +468,40 @@ function Set-Dns {
     }
 
     try {
-        $servers = @($Primary)
-        if ($Secondary) { $servers += $Secondary }
-        Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses $servers -ErrorAction Stop
+        # Build IPv4 list
+        $v4List = @($Primary)
+        if ($Secondary) { $v4List += $Secondary }
 
+        # Build IPv6 list (if adapter has IPv6 enabled)
+        $v6List = @()
         $ipv6Binding = Get-NetAdapterBinding -Name $adapter.Name -ComponentID 'ms_tcpip6' -ErrorAction SilentlyContinue
-        $ipv6Servers = @()
         if ($ipv6Binding -and $ipv6Binding.Enabled) {
             $primProvider = $script:DnsProviders | Where-Object { $_.IP -eq $Primary } | Select-Object -First 1
             $secProvider  = $script:DnsProviders | Where-Object { $_.IP -eq $Secondary } | Select-Object -First 1
 
-            if ($primProvider -and $primProvider.IPv6) { $ipv6Servers += $primProvider.IPv6 } else { $ipv6Servers += "2606:4700:4700::1111" }
+            if ($primProvider -and $primProvider.IPv6) { $v6List += $primProvider.IPv6 } else { $v6List += "2606:4700:4700::1111" }
             if ($Secondary) {
-                if ($secProvider -and $secProvider.IPv6) { $ipv6Servers += $secProvider.IPv6 } else { $ipv6Servers += "2001:4860:4860::8888" }
+                if ($secProvider -and $secProvider.IPv6) { $v6List += $secProvider.IPv6 } else { $v6List += "2001:4860:4860::8888" }
             }
+        }
 
-            if ($ipv6Servers.Count -gt 0) {
-                Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses $ipv6Servers -AddressFamily IPv6 -ErrorAction SilentlyContinue
-            }
+        # Single unified call with all addresses
+        $allServers = @($v4List + $v6List)
+        $cmdletOk = $false
+        try {
+            Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses $allServers -ErrorAction Stop
+            $cmdletOk = $true
+        } catch {
+            Write-Host "  $(C 'Y' 'Cmdlet failed, falling back to netsh...')"
+        }
+
+        if (-not $cmdletOk) {
+            # Fallback for IPv4
+            if ($v4List.Count -ge 1) { netsh interface ipv4 set dns name="$($adapter.Name)" source=static addr="$($v4List[0])" register=primary | Out-Null }
+            if ($v4List.Count -ge 2) { netsh interface ipv4 add dns name="$($adapter.Name)" addr="$($v4List[1])" index=2 | Out-Null }
+            # Fallback for IPv6
+            if ($v6List.Count -ge 1) { netsh interface ipv6 set dns name="$($adapter.Name)" source=static addr="$($v6List[0])" | Out-Null }
+            if ($v6List.Count -ge 2) { netsh interface ipv6 add dns name="$($adapter.Name)" addr="$($v6List[1])" index=2 | Out-Null }
         }
 
         # Best-effort DoH template registration (Win 11 / modern Win 10)
@@ -497,8 +519,8 @@ function Set-Dns {
         } catch {}
 
         ipconfig /flushdns | Out-Null
-        $v6msg = if ($ipv6Servers.Count -gt 0) { " & IPv6: $($ipv6Servers -join ', ')" } else { "" }
-        Write-Host "  $(C 'G' "Applied [$Category] DNS to $($adapter.Name): $($servers -join ', ')$v6msg")"
+        $v6msg = if ($v6List.Count -gt 0) { " & IPv6: $($v6List -join ', ')" } else { "" }
+        Write-Host "  $(C 'G' "Applied [$Category] DNS to $($adapter.Name): $($v4List -join ', ')$v6msg")"
 
         # Auto-Rollback Safety: verify DNS resolution works
         Write-Host "  $(C 'C' 'Verifying DNS resolution...')"
