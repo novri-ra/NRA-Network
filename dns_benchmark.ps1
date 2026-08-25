@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    Ultra-Fast DNS Benchmark & Auto-Optimizer (God-Mode Edition v2)
+    Ultra-Fast DNS Benchmark & Auto-Optimizer (God-Mode Edition v2.1.0)
 .DESCRIPTION
     Unified parallel pipeline, DoH/DoT/Hijack detection, ECS tagging,
     LLMNR/NetBIOS disable, backup/rollback, Markdown/JSON/CSV export,
@@ -101,8 +101,8 @@ $script:DnsProviders = @(
 function Show-Banner {
     Write-Host ""
     Write-Host "$(C 'C' '╔═════════════════════════════════════════════════════════════════════════════╗')"
-    Write-Host "$(C 'C' '║') $(C 'BOLD' '   ⚡ DNS OPTIMIZER (GOD-MODE v2) - Ultra-Fast Network Benchmark Tool    ') $(C 'C' '║')"
-    Write-Host "$(C 'C' '║') $(C 'DG' "   Engine: Async Runspace Pipeline | DoH/DoT | Hijack | ECS | Tuning     ") $(C 'C' '║')"
+    Write-Host "$(C 'C' '║') $(C 'BOLD' '   ⚡ DNS OPTIMIZER (GOD-MODE v2.1.0) - Ultra-Fast Network Benchmark     ') $(C 'C' '║')"
+    Write-Host "$(C 'C' '║') $(C 'DG' "   Async Pipeline | DoH/DoT | ISP Detect | Bufferbloat | Live Monitor   ") $(C 'C' '║')"
     Write-Host "$(C 'C' '╚═════════════════════════════════════════════════════════════════════════════╝')"
     Write-Host ""
 }
@@ -832,6 +832,104 @@ function Test-GameServerRouting {
     Write-Host "  $(C 'DG' 'Note: Results reflect routing with your current DNS. Re-test after changing DNS to compare.')"
 }
 
+# ── Diagnostic Modules ────────────────────────────────────────────────────────
+function Monitor-LiveLatency {
+    Write-Host ""
+    Write-Host "  $(C 'BOLD' 'Live Latency & Jitter Monitor (Press Q to exit)')"
+    $adapter = Get-ActiveAdapter
+    $activeDns = if ($adapter) { (Get-DnsClientServerAddress -InterfaceAlias $adapter.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses } else { $null }
+    if (-not $activeDns) { $activeDns = '8.8.8.8' } else { $activeDns = $activeDns[0] }
+    $targets = @(
+        @{Name="Active DNS ($activeDns)"; IP=$activeDns}
+        @{Name="Cloudflare (1.1.1.1)"; IP="1.1.1.1"}
+        @{Name="Valve SEA Gateway"; IP="103.10.124.1"}
+    )
+    $pinger = New-Object System.Net.NetworkInformation.Ping
+    $hist = @{}; $targets | ForEach-Object { $hist[$_.IP] = [System.Collections.ArrayList]::new() }
+    $sparkChars = @(' ','`u{2582}','`u{2583}','`u{2584}','`u{2585}','`u{2586}','`u{2587}','`u{2588}')
+    Write-Host "  $(C 'DG' ('{0,-25} | {1,-6} | {2,-6} | {3,-6} | {4}' -f 'Target','Cur','Avg','Jitter','Sparkline'))"
+    Write-Host "  $(C 'DG' ('-' * 80))"
+    $baseY = [Console]::CursorTop
+    foreach ($t in $targets) { Write-Host "" }
+    try {
+        while ($true) {
+            if ([Console]::KeyAvailable) { $k = [Console]::ReadKey($true); if ($k.Key -eq [ConsoleKey]::Q) { break } }
+            for ($ti = 0; $ti -lt $targets.Count; $ti++) {
+                $t = $targets[$ti]; $h = $hist[$t.IP]
+                try { $rep = $pinger.Send($t.IP, 500); $lat = if ($rep.Status -eq 'Success') { [int]$rep.RoundtripTime } else { 999 } } catch { $lat = 999 }
+                [void]$h.Add($lat); if ($h.Count -gt 20) { $h.RemoveAt(0) }
+                $valid = @($h | Where-Object { $_ -ne 999 })
+                $avg = if ($valid.Count -gt 0) { [math]::Round(($valid | Measure-Object -Average).Average) } else { 0 }
+                $jit = if ($valid.Count -gt 1) { ($valid | Measure-Object -Maximum).Maximum - ($valid | Measure-Object -Minimum).Minimum } else { 0 }
+                $spark = ""
+                foreach ($v in $h) { if ($v -eq 999) { $spark += 'X' } else { $idx = [math]::Min([math]::Floor($v / 20), 7); $spark += $sparkChars[$idx] } }
+                $latStr = if ($lat -eq 999) { 'ERR   ' } else { "$lat".PadRight(6) }
+                [Console]::SetCursorPosition(0, $baseY + $ti)
+                Write-Host "  $('{0,-25}' -f $t.Name) | $latStr | $('{0,-6}' -f $avg) | $('{0,-6}' -f $jit) | $spark                    " -NoNewline
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    } finally { $pinger.Dispose(); [Console]::SetCursorPosition(0, $baseY + $targets.Count); Write-Host "`n  $(C 'DG' 'Monitor stopped.')" }
+}
+
+
+function Enable-WindowsNativeDoH {
+    Write-Host "`n  $(C 'BOLD' 'Windows Native DNS-over-HTTPS (DoH) Configurator')"
+    $build = (Get-CimInstance Win32_OperatingSystem).BuildNumber -as [int]
+    if ($build -lt 19041) { Write-Host "  $(C 'R' 'Native DoH requires Windows 10 Build 19041+ or Windows 11.')"; return }
+    $adapter = Get-ActiveAdapter
+    if (-not $adapter) { Write-Host "  $(C 'R' 'No active adapter found.')"; return }
+    $activeDns = (Get-DnsClientServerAddress -InterfaceAlias $adapter.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses
+    if (-not $activeDns) { Write-Host "  $(C 'Y' 'No static DNS configured. Apply a DNS profile first.')"; return }
+    $dohCount = 0
+    foreach ($ip in $activeDns) {
+        $prov = $script:DnsProviders | Where-Object { $_.IP -eq $ip } | Select-Object -First 1
+        if ($prov -and $prov.DoH) {
+            Write-Host "  $(C 'C' "Mapping: $ip -> $($prov.DoH)")"
+            try { Add-DnsClientDohServerAddress -ServerAddress $ip -DohTemplate $prov.DoH -AllowFallbackToUdp $false -ErrorAction Stop; $dohCount++ }
+            catch { Write-Host "  $(C 'Y' 'Template may already exist or OS build lacks full DoH support.')" }
+        } else { Write-Host "  $(C 'DG' "No DoH template for: $ip")" }
+    }
+    if ($dohCount -gt 0) { Write-Host "  $(C 'G' "$dohCount DoH template(s) registered. Encrypted DNS active.")" }
+    else { Write-Host "  $(C 'Y' 'No templates mapped. Ensure a DoH-capable DNS is applied first.')" }
+}
+
+function Test-Bufferbloat {
+    Write-Host "`n  $(C 'BOLD' 'Bufferbloat & Responsiveness Sanity Probe')"
+    Write-Host "  $(C 'DG' 'Testing HTTP(S) connection establishment latency...')"
+    $urls = @("https://1.1.1.1", "https://dns.google", "https://www.microsoft.com")
+    foreach ($url in $urls) {
+        Write-Host -NoNewline "  $(C 'C' "  $url ...")"
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            $req = [System.Net.WebRequest]::Create($url); $req.Timeout = 3000; $req.Method = "HEAD"
+            $resp = $req.GetResponse(); $sw.Stop(); $ms = [math]::Round($sw.Elapsed.TotalMilliseconds); $resp.Close()
+            $col = if ($ms -lt 80) { 'G' } elseif ($ms -lt 200) { 'Y' } else { 'R' }
+            $tag = if ($ms -lt 80) { 'OK' } elseif ($ms -lt 200) { 'Mild' } else { 'Bloated' }
+            Write-Host " $(C $col "${ms}ms [$tag]")"
+        } catch { Write-Host " $(C 'R' 'TIMEOUT/FAIL')" }
+    }
+    Write-Host "  $(C 'DG' 'Values >200ms suggest bufferbloat or congested upstream path.')"
+}
+
+function Compare-ActiveISP {
+    param($Results)
+    Write-Host "`n  $(C 'BOLD' 'ISP DNS vs Top Providers Comparison')"
+    $isp = $Results | Where-Object { $_.Name -like "[ISP]*" } | Select-Object -First 1
+    if (-not $isp) { Write-Host "  $(C 'Y' 'ISP DNS was not detected during startup.')"; return }
+    Write-Host "`n  $(C 'BOLD' ('{0,-28} {1,-10} {2,-10} {3,-8}' -f 'Provider','Ping','DNS','Loss'))"
+    Write-Host "  $(C 'BOLD' ('-' * 60))"
+    Write-Host "  $(C 'Y' ('{0,-28} {1,-10} {2,-10} {3,-8}' -f $isp.Name, "$([math]::Round($isp.PingAvg,1))ms", "$([math]::Round($isp.DnsTime,1))ms", "$([math]::Round($isp.Loss,0))%"))"
+    $top = @($Results | Where-Object { $_.Status -eq 'OK' -and $_.Name -notlike "[ISP]*" } | Select-Object -First 5)
+    foreach ($r in $top) {
+        $col = if ($r.PingAvg -lt 30) { 'G' } elseif ($r.PingAvg -lt 80) { 'Y' } else { 'R' }
+        Write-Host "  $(C $col ('{0,-28} {1,-10} {2,-10} {3,-8}' -f $r.Name, "$([math]::Round($r.PingAvg,1))ms", "$([math]::Round($r.DnsTime,1))ms", "$([math]::Round($r.Loss,0))%"))"
+    }
+    Write-Host ""
+}
+
+
+
 # ── Interactive Menu ─────────────────────────────────────────────────────────
 function Show-Menu {
     param($Results, $ElapsedSec)
@@ -855,6 +953,12 @@ function Show-Menu {
         Write-Host "  $(C 'C' '│')  $(C 'G' '6.') Auto-Detect & Apply Optimal MTU                     $(C 'C' '│')"
         Write-Host "  $(C 'C' '│')  $(C 'M' '7.') Run Windows DNS Cache, TCP & NIC Hardware Tuning    $(C 'C' '│')"
         Write-Host "  $(C 'C' '│')  $(C 'Y' '8.') Test Game Server Routing (SEA Latency)              $(C 'C' '│')"
+        Write-Host "  $(C 'C' '├──────────────────────────────────────────────────────────────┤')"
+        Write-Host "  $(C 'C' '│')  $(C 'DG' '[ DIAGNOSTICS & ADVANCED ]')                              $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'C' '12.') Live Latency & Jitter Monitor (Real-time)          $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'C' '13.') Compare Active ISP DNS vs Top Providers            $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'M' '14.') Enable Windows Native DNS-over-HTTPS (DoH)        $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'Y' '15.') Network Bufferbloat & Response Sanity Test         $(C 'C' '│')"
         Write-Host "  $(C 'C' '├──────────────────────────────────────────────────────────────┤')"
         Write-Host "  $(C 'C' '│')  $(C 'DG' '[ MANAGEMENT & TELEMETRY ]')                             $(C 'C' '│')"
         Write-Host "  $(C 'C' '│')  $(C 'M' '9.') Restore Previous DNS from Backup                    $(C 'C' '│')"
@@ -966,6 +1070,10 @@ function Show-Menu {
                 }
             }
             '11' { Export-Telemetry -Results $Results -ElapsedSec $ElapsedSec }
+            '12' { Monitor-LiveLatency }
+            '13' { Compare-ActiveISP -Results $Results }
+            '14' { Enable-WindowsNativeDoH }
+            '15' { Test-Bufferbloat }
             '0' { Write-Host "  $(C 'DG' 'Goodbye.')"; return }
             default { Write-Host "  $(C 'Y' 'Invalid choice.')" }
         }
@@ -984,6 +1092,19 @@ function Main {
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     Write-Host "  $(C $(if ($isAdmin) {'G'} else {'Y'}) "Admin: $isAdmin")"
     
+    # Detect ISP DNS to inject into pipeline
+    if ($adapter) {
+        $ispDns = try { (Get-DnsClientServerAddress -InterfaceAlias $adapter.Name -AddressFamily IPv4 -ErrorAction Stop).ServerAddresses } catch { $null }
+        if (-not $ispDns) { $raw = netsh interface ipv4 show dnsservers "$($adapter.Name)" 2>$null; $ispDns = @([regex]::Matches($raw, '\d+\.\d+\.\d+\.\d+') | ForEach-Object { $_.Value }) }
+        if ($ispDns -and $ispDns.Count -gt 0) {
+            $ispIp = $ispDns[0]
+            if (-not ($script:DnsProviders | Where-Object { $_.IP -eq $ispIp })) {
+                $script:DnsProviders = @(@{Name="[ISP] Detected ($ispIp)"; IP=$ispIp; IPv6=""; Category="ISP"; DoH=""; DoT=""; ECS=$false}) + $script:DnsProviders
+                Write-Host "  $(C 'C' "Injected active ISP DNS ($ispIp) into benchmark.")"
+            }
+        }
+    }
+
     Write-Host "`n  $(C 'BOLD' "Executing Unified Pipeline Benchmark ($($script:DnsProviders.Count) Providers)...")"
     
     $sw = [System.Diagnostics.Stopwatch]::StartNew()

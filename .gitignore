@@ -4,3 +4,4 @@ backup/
 *.tmp
 .vs/
 .vscode/nul
+nul
