@@ -816,6 +816,7 @@ function Show-Menu {
         Write-Host "  $(C 'C' '│')  $(C 'B' '8.') Export Full Telemetry (CSV, JSON, Markdown Report)   $(C 'C' '│')"
         Write-Host "  $(C 'C' '│')  $(C 'G' '10') Test Game Server Routing (SEA Latency)              $(C 'C' '│')"
         Write-Host "  $(C 'C' '│')  $(C 'G' '11') Auto-Detect & Apply Optimal MTU                     $(C 'C' '│')"
+        Write-Host "  $(C 'C' '│')  $(C 'Y' '12') Apply Best Gaming DNS (ECS + Low Jitter)            $(C 'C' '│')"
         Write-Host "  $(C 'C' '│')  $(C 'DG' '9.') Exit                                                $(C 'C' '│')"
         Write-Host "  $(C 'C' '└──────────────────────────────────────────────────────────────┘')"
         $c = Read-Host "  Select option"
@@ -882,6 +883,44 @@ function Show-Menu {
             '8' { Export-Telemetry -Results $Results -ElapsedSec $ElapsedSec }
             '10' { Test-GameServerRouting }
             '11' { Optimize-MTU }
+            '12' {
+                # Gaming DNS: ECS + 0% loss + weighted score (40% PingAvg, 30% DnsTime, 30% Jitter)
+                $gamingPool = @($Results | Where-Object { $_.Status -eq 'OK' -and $_.Loss -eq 0 -and $_.ECS -eq $true })
+                if ($gamingPool.Count -eq 0) {
+                    # Relax: allow any OK+0%loss provider
+                    $gamingPool = @($Results | Where-Object { $_.Status -eq 'OK' -and $_.Loss -eq 0 })
+                    Write-Host "  $(C 'Y' 'No ECS providers with 0% loss. Relaxed filter (any 0% loss).')"
+                }
+                if ($gamingPool.Count -eq 0) {
+                    Write-Host "  $(C 'R' 'No gaming-grade DNS candidates found.')"
+                } else {
+                    $gamingRanked = $gamingPool | ForEach-Object {
+                        $ep = if ($_.PingAvg -eq [double]::MaxValue) { 999 } else { $_.PingAvg }
+                        $ed = if ($_.DnsTime -eq [double]::MaxValue) { 999 } else { $_.DnsTime }
+                        $ej = if ($_.Jitter -eq 999) { 999 } else { $_.Jitter }
+                        $_ | Add-Member -NotePropertyName GamingScore -NotePropertyValue (($ep * 0.4) + ($ed * 0.3) + ($ej * 0.3)) -PassThru -Force
+                    } | Sort-Object GamingScore
+
+                    $best = $gamingRanked[0]
+                    $baseName = $best.Name -replace ' (Primary|Secondary|1|2|3|4)',''
+                    $pair = $gamingRanked | Where-Object { $_.Name -match [regex]::Escape($baseName) -and $_.IP -ne $best.IP } | Select-Object -First 1
+                    if (-not $pair) { $pair = $gamingRanked | Where-Object { $_.IP -ne $best.IP } | Select-Object -First 1 }
+
+                    $bestProv = $script:DnsProviders | Where-Object { $_.IP -eq $best.IP } | Select-Object -First 1
+                    $pairProv = if ($pair) { $script:DnsProviders | Where-Object { $_.IP -eq $pair.IP } | Select-Object -First 1 } else { $null }
+
+                    Write-Host ""
+                    Write-Host "  $(C 'BOLD' '── Gaming DNS Selection ──')"
+                    Write-Host "  $(C 'G' 'Primary: ')  $($best.Name) | IPv4: $($best.IP) | IPv6: $(if ($bestProv.IPv6) { $bestProv.IPv6 } else { 'fallback' }) | ECS: $($best.ECS) | Jitter: $([math]::Round($best.Jitter,1))ms | GScore: $([math]::Round($best.GamingScore,1))"
+                    if ($pair) {
+                        Write-Host "  $(C 'G' 'Secondary:')  $($pair.Name) | IPv4: $($pair.IP) | IPv6: $(if ($pairProv.IPv6) { $pairProv.IPv6 } else { 'fallback' }) | ECS: $($pair.ECS) | Jitter: $([math]::Round($pair.Jitter,1))ms | GScore: $([math]::Round($pair.GamingScore,1))"
+                    }
+
+                    Set-Dns -Primary $best.IP -Secondary $(if ($pair) { $pair.IP } else { $null }) -Category 'Gaming'
+                    Write-Host "  $(C 'C' 'Running post-apply TCP/latency tuning...')"
+                    Optimize-NetworkRegistry
+                }
+            }
             '9' { Write-Host "  $(C 'DG' 'Goodbye.')"; return }
             default { Write-Host "  $(C 'Y' 'Invalid choice.')" }
         }
