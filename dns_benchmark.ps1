@@ -11,8 +11,24 @@
 Set-StrictMode -Off
 $ErrorActionPreference = 'SilentlyContinue'
 
-# ── Setup Encoding ────────────────────────────────────────────────────────────
+# ── Setup Encoding & ANSI VT ────────────────────────────────────────────────────────────
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+try {
+    $VTType = Add-Type -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError=true)]
+public static extern bool SetConsoleMode(IntPtr hConsoleHandle, int mode);
+[DllImport("kernel32.dll", SetLastError=true)]
+public static extern bool GetConsoleMode(IntPtr handle, out int mode);
+[DllImport("kernel32.dll", SetLastError=true)]
+public static extern IntPtr GetStdHandle(int handle);
+'@ -Name 'VTConsole' -Namespace 'Win32' -PassThru -ErrorAction SilentlyContinue
+    if ($VTType) {
+        $hOut = [Win32.VTConsole]::GetStdHandle(-11)
+        $cMode = 0
+        [Win32.VTConsole]::GetConsoleMode($hOut, [ref]$cMode) | Out-Null
+        [Win32.VTConsole]::SetConsoleMode($hOut, $cMode -bor 0x0004) | Out-Null  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    }
+} catch {}
 
 # ── ANSI Helpers ──────────────────────────────────────────────────────────────
 $ESC = [char]27
@@ -87,17 +103,20 @@ function Invoke-BenchmarkEngine {
         $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
 
         # 1. ICMP Ping
-        $pinger = New-Object System.Net.NetworkInformation.Ping
         $icmpTimes = @()
         $lost = 0
-        for ($i = 0; $i -lt $IcmpCount; $i++) {
-            try {
-                $rep = $pinger.Send($IP, $TimeoutMs)
-                if ($rep.Status -eq 'Success') { $icmpTimes += $rep.RoundtripTime }
-                else { $lost++ }
-            } catch { $lost++ }
+        try {
+            $pinger = New-Object System.Net.NetworkInformation.Ping
+            for ($i = 0; $i -lt $IcmpCount; $i++) {
+                try {
+                    $rep = $pinger.Send($IP, $TimeoutMs)
+                    if ($rep.Status -eq 'Success') { $icmpTimes += $rep.RoundtripTime }
+                    else { $lost++ }
+                } catch { $lost++ }
+            }
+        } finally {
+            if ($null -ne $pinger) { $pinger.Dispose() }
         }
-        $pinger.Dispose()
 
         $pingAvg = if ($icmpTimes.Count -gt 0) { ($icmpTimes | Measure-Object -Average).Average } else { [double]::MaxValue }
         $pingJitter = if ($icmpTimes.Count -gt 0) { ($icmpTimes | Measure-Object -Maximum).Maximum - ($icmpTimes | Measure-Object -Minimum).Minimum } else { 999 }
@@ -115,26 +134,30 @@ function Invoke-BenchmarkEngine {
                 $udp.Client.ReceiveTimeout = $TimeoutMs
                 $udp.Client.SendTimeout = $TimeoutMs
 
-                $ms = New-Object System.IO.MemoryStream
-                $ms.WriteByte([byte](Get-Random -Min 0 -Max 256))
-                $ms.WriteByte([byte](Get-Random -Min 0 -Max 256))
-                $flags = [byte[]](0x01,0x20, 0x00,0x01, 0x00,0x00, 0x00,0x00, 0x00,0x00)
-                $ms.Write($flags, 0, $flags.Length)
-                foreach ($lbl in $domain.Split('.')) {
-                    $ms.WriteByte([byte]$lbl.Length)
-                    $b = [System.Text.Encoding]::ASCII.GetBytes($lbl)
-                    $ms.Write($b, 0, $b.Length)
+                try {
+                    $ms = New-Object System.IO.MemoryStream
+                    $ms.WriteByte([byte](Get-Random -Min 0 -Max 256))
+                    $ms.WriteByte([byte](Get-Random -Min 0 -Max 256))
+                    $flags = [byte[]](0x01,0x20, 0x00,0x01, 0x00,0x00, 0x00,0x00, 0x00,0x00)
+                    $ms.Write($flags, 0, $flags.Length)
+                    foreach ($lbl in $domain.Split('.')) {
+                        $ms.WriteByte([byte]$lbl.Length)
+                        $b = [System.Text.Encoding]::ASCII.GetBytes($lbl)
+                        $ms.Write($b, 0, $b.Length)
+                    }
+                    $ms.WriteByte(0x00)
+                    $ms.Write([byte[]](0x00,0x01, 0x00,0x01), 0, 4)
+                    $pkt = $ms.ToArray()
+                } finally {
+                    if ($null -ne $ms) { $ms.Dispose() }
                 }
-                $ms.WriteByte(0x00)
-                $ms.Write([byte[]](0x00,0x01, 0x00,0x01), 0, 4)
-                $pkt = $ms.ToArray()
-                $ms.Dispose()
 
                 $udp.Connect($IP, 53)
                 [void]$udp.Send($pkt, $pkt.Length)
                 $ep = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
                 $res = $udp.Receive([ref]$ep)
-                $udp.Close()
+                
+                if ($null -eq $res -or $res.Length -lt 12) { return $null }
                 
                 # Check RCODE (byte 3, lower 4 bits)
                 $rcode = $res[3] -band 0x0F
@@ -147,8 +170,9 @@ function Invoke-BenchmarkEngine {
                 
                 return @{ Time=$sw.Elapsed.TotalMilliseconds; RCode=$rcode; AnsCount=$ansCount; DNSSEC=$dnssec }
             } catch {
-                try { $udp.Close() } catch {}
                 return $null
+            } finally {
+                if ($null -ne $udp) { try { $udp.Close(); $udp.Dispose() } catch {} }
             }
         }
 
@@ -217,15 +241,15 @@ function Invoke-BenchmarkEngine {
             try {
                 $rawRes = $j.Pipe.EndInvoke($j.Handle)
                 if ($rawRes.Count -gt 0) { $res = $rawRes[0] }
-            } catch {}
+            } catch {} finally {
+                try { $j.Pipe.Dispose() } catch {}
+            }
             
             $hasIP = $false
             try { $hasIP = $null -ne $res -and $null -ne $res.IP } catch {}
             if (-not $hasIP) {
                 $res = @{ IP = $j.P.IP; DoH = ($j.P.DoH -ne ""); DoT = ($j.P.DoT -ne ""); ECS = $j.P.ECS; PingAvg = [double]::MaxValue; PingJitter = 999; Loss = 100.0; DnsAvg = [double]::MaxValue; DnsFailed = $true; Hijacked = $false; DNSSEC = $false }
             }
-            
-            $j.Pipe.Dispose()
             $done++
             $pct = [math]::Floor(($done / $total) * 100)
             $bar = ([string][char]0x2588 * [math]::Floor($pct / 2.5)).PadRight(40)
@@ -268,8 +292,7 @@ function Invoke-BenchmarkEngine {
         if ($jobs.Count -gt 0) { Start-Sleep -Milliseconds 20 }
     }
     Write-Host ""
-    $pool.Close()
-    $pool.Dispose()
+    try { $pool.Close() } finally { $pool.Dispose() }
     return $results | Sort-Object Score
 }
 
@@ -321,19 +344,24 @@ function Show-Table {
 
 # ── Configuration Management ─────────────────────────────────────────────────
 function Get-ActiveAdapter {
-    $adapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and ($_.InterfaceDescription -notmatch 'Loopback|Virtual|vEthernet|Hyper-V') } | Sort-Object -Property @{Expression={if($_.Name -match 'Wi-Fi|Wireless'){0}elseif($_.Name -match 'Ethernet'){1}else{2}}}
-    if ($adapters) { return $adapters[0] }
+    # Exclude only loopback, allow Virtual/Hyper-V/PPPoE if they are the actual active WAN interfaces
+    $adapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and ($_.InterfaceDescription -notmatch 'Loopback') } | Sort-Object -Property @{Expression={if($_.Name -match 'Wi-Fi|Wireless'){0}elseif($_.Name -match 'Ethernet'){1}else{2}}}
     
-    # Fallback to NetIPConfiguration default gateway check
+    # Fallback to NetIPConfiguration default gateway check first since it's the most reliable for active internet connection
     try {
         $ipCfg = Get-NetIPConfiguration -ErrorAction SilentlyContinue | Where-Object { $_.IPv4DefaultGateway -ne $null } | Select-Object -First 1
         if ($ipCfg -and $ipCfg.NetAdapter) { return $ipCfg.NetAdapter }
     } catch {}
     
+    if ($adapters) { return $adapters[0] }
+    
     # Final fallback to WMI
     try {
         $wmi = Get-WmiObject Win32_NetworkAdapterConfiguration -ErrorAction SilentlyContinue | Where-Object { $_.IPEnabled -eq $true -and $_.DefaultIPGateway -ne $null } | Select-Object -First 1
-        if ($wmi) { return Get-NetAdapter -InterfaceIndex $wmi.Index -ErrorAction SilentlyContinue }
+        if ($wmi) { 
+            $wmiAdapter = Get-NetAdapter -InterfaceIndex $wmi.Index -ErrorAction SilentlyContinue
+            if ($wmiAdapter) { return $wmiAdapter }
+        }
     } catch {}
     
     return $null
@@ -403,7 +431,11 @@ function Set-Dns {
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $isAdmin) { Write-Host "  $(C 'R' 'Administrator privileges required.')"; return }
 
-    Backup-NetworkSettings | Out-Null
+    $backupOk = $false
+    try { Backup-NetworkSettings | Out-Null; $backupOk = $true } catch {}
+    if (-not $backupOk) {
+        Write-Host "  $(C 'Y' 'Warning: Could not create rollback backup. Proceeding anyway.')"
+    }
 
     try {
         $servers = @($Primary)
@@ -688,25 +720,29 @@ function Test-GameServerRouting {
             for ($i = 0; $i -lt $pingCount; $i++) {
                 $sw = [System.Diagnostics.Stopwatch]::StartNew()
                 try {
-                    $client = New-Object System.Net.Sockets.TcpClient
-                    $iar = $client.BeginConnect($t.IP, 443, $null, $null)
-                    $wait = $iar.AsyncWaitHandle.WaitOne(800, $false)
-                    if ($wait -and $client.Connected) {
-                        $client.EndConnect($iar)
-                        $times += $sw.Elapsed.TotalMilliseconds
-                    } else {
-                        $client.Close()
+                    $client = $null
+                    try {
                         $client = New-Object System.Net.Sockets.TcpClient
-                        $iar = $client.BeginConnect($t.IP, 80, $null, $null)
+                        $iar = $client.BeginConnect($t.IP, 443, $null, $null)
                         $wait = $iar.AsyncWaitHandle.WaitOne(800, $false)
                         if ($wait -and $client.Connected) {
                             $client.EndConnect($iar)
                             $times += $sw.Elapsed.TotalMilliseconds
                         } else {
-                            $lost++
+                            try { $client.Close(); $client.Dispose() } catch {}
+                            $client = New-Object System.Net.Sockets.TcpClient
+                            $iar = $client.BeginConnect($t.IP, 80, $null, $null)
+                            $wait = $iar.AsyncWaitHandle.WaitOne(800, $false)
+                            if ($wait -and $client.Connected) {
+                                $client.EndConnect($iar)
+                                $times += $sw.Elapsed.TotalMilliseconds
+                            } else {
+                                $lost++
+                            }
                         }
+                    } finally {
+                        if ($null -ne $client) { try { $client.Close(); $client.Dispose() } catch {} }
                     }
-                    $client.Close()
                 } catch { $lost++ }
             }
         }
@@ -796,14 +832,17 @@ function Show-Menu {
                     Write-Host "    $(C 'C' ($i+1)). $($viable[$i].Name) ($($viable[$i].IP))"
                 }
                 $sel = Read-Host "  Enter number"
-                $idx = [int]$sel - 1
-                if ($idx -ge 0 -and $idx -lt $viable.Count) {
+                $idx = $sel -as [int]
+                if ($null -eq $idx -or $idx -lt 1 -or $idx -gt $viable.Count) {
+                    Write-Host "  $(C 'R' 'Invalid selection.')"
+                } else {
+                    $idx = $idx - 1
                     $best = $viable[$idx]
                     $baseName = $best.Name -replace ' (Primary|Secondary|1|2|3|4)',''
                     $pair = $viable | Where-Object { $_.Name -match [regex]::Escape($baseName) -and $_.IP -ne $best.IP } | Select-Object -First 1
                     if (-not $pair) { $pair = $viable | Where-Object { $_.IP -ne $best.IP } | Select-Object -First 1 }
                     Set-Dns -Primary $best.IP -Secondary ($pair.IP) -Category 'Custom'
-                } else { Write-Host "  $(C 'R' 'Invalid selection.')" }
+                }
             }
             '5' { Restore-NetworkSettings }
             '6' {
