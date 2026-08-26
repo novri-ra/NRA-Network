@@ -2,7 +2,9 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Fastest', 'Gaming', 'Reset', 'BenchmarkOnly', 'Menu')]
-    [string]$Mode = 'Menu'
+    [string]$Mode = 'Menu',
+    [ValidateSet('All', 'Fast', 'Privacy', 'AdBlock', 'Global')]
+    [string]$Preset = 'All'
 )
 <#
 .SYNOPSIS
@@ -1222,7 +1224,12 @@ function Main {
         }
     }
 
-    Write-Host "`n  $(C 'BOLD' "Executing Unified Pipeline Benchmark ($($script:DnsProviders.Count) Providers)...")"
+    if ($Preset -ne 'All') {
+        $script:DnsProviders = @($script:DnsProviders | Where-Object { $_.Category -eq $Preset -or $_.Category -eq 'ISP' })
+    }
+
+    $provCount = $script:DnsProviders.Count
+    Write-Host "`n  $(C 'BOLD' "Executing Unified Pipeline Benchmark ($provCount Providers)...")"
     
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $results = Invoke-BenchmarkEngine -Targets $script:DnsProviders
