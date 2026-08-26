@@ -152,6 +152,7 @@ function Invoke-BenchmarkEngine {
 
         function Test-UDP-DNS($domain) {
             $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $udp = $null
             try {
                 $udp = New-Object System.Net.Sockets.UdpClient
                 $udp.Client.ReceiveTimeout = $TimeoutMs
@@ -315,7 +316,7 @@ function Invoke-BenchmarkEngine {
         if ($jobs.Count -gt 0) { Start-Sleep -Milliseconds 20 }
     }
     Write-Host ""
-    try { $pool.Close() } finally { $pool.Dispose() }
+    try { $pool.Close(); $pool.Dispose() } catch {}
     return $results | Sort-Object Score
 }
 
@@ -366,8 +367,22 @@ function Show-Table {
 }
 
 # ── Configuration Management ─────────────────────────────────────────────────
+function Get-ActiveAdapterMenu {
+    $adapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and ($_.InterfaceDescription -notmatch 'Loopback') }
+    if (-not $adapters) { return $null }
+    if ($adapters.Count -eq 1) { return $adapters[0] }
+    Write-Host "`n  $(C 'BOLD' 'Available Network Adapters:')"
+    for ($i = 0; $i -lt $adapters.Count; $i++) {
+        Write-Host "    $($i + 1). $($adapters[$i].Name) ($($adapters[$i].InterfaceDescription))"
+    }
+    $sel = Read-Host "  Select adapter (1-$($adapters.Count)) [Default: 1]"
+    $idx = ($sel -as [int]) - 1
+    if ($idx -lt 0 -or $idx -ge $adapters.Count) { $idx = 0 }
+    return $adapters[$idx]
+}
+
 function Get-ActiveAdapter {
-    # Exclude only loopback, allow Virtual/Hyper-V/PPPoE if they are the actual active WAN interfaces
+    if ($script:SelectedAdapter) { return $script:SelectedAdapter }
     $adapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and ($_.InterfaceDescription -notmatch 'Loopback') } | Sort-Object -Property @{Expression={if($_.Name -match 'Wi-Fi|Wireless'){0}elseif($_.Name -match 'Ethernet'){1}else{2}}}
     
     # Fallback to NetIPConfiguration default gateway check first since it's the most reliable for active internet connection
@@ -759,6 +774,9 @@ function Test-GameServerRouting {
         @{Name="Riot / Valorant SEA (SG)";    IP="104.160.131.3"}
         @{Name="Riot / Valorant SEA (SG 2)";  IP="151.106.248.1"}
         @{Name="Valve / Steam CS2 (SG Relay)";IP="103.10.124.1"}
+        @{Name="Apex Legends SEA (SG)";       IP="119.81.30.122"}
+        @{Name="PUBG SEA (SG)";               IP="43.251.226.1"}
+        @{Name="Honor of Kings SEA";          IP="162.62.115.1"}
         @{Name="Moonton / MLBB SEA";          IP="161.117.234.1"}
         @{Name="Cloudflare SEA (Anycast)";    IP="1.1.1.1"}
         @{Name="Google SEA (Anycast)";        IP="8.8.8.8"}
@@ -901,6 +919,30 @@ function Enable-WindowsNativeDoH {
     else { Write-Host "  $(C 'Y' 'No templates mapped. Ensure a DoH-capable DNS is applied first.')" }
 }
 
+function Monitor-Watchdog {
+    param($Results)
+    Write-Host "`n  $(C 'BOLD' 'DNS Health Watchdog (Background Loop)')"
+    Write-Host "  $(C 'DG' 'Press Q to exit watchdog.')"
+    $best = $Results | Where-Object { $_.Status -eq 'OK' } | Select-Object -First 1
+    if (-not $best) { Write-Host "  $(C 'R' 'No valid DNS providers to monitor.')"; return }
+    
+    $pinger = New-Object System.Net.NetworkInformation.Ping
+    try {
+        while ($true) {
+            if ([Console]::KeyAvailable) { $k = [Console]::ReadKey($true); if ($k.Key -eq [ConsoleKey]::Q) { break } }
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $rep = $null
+            try { $rep = $pinger.Send($best.IP, 1000) } catch {}
+            $lat = if ($null -ne $rep -and $rep.Status -eq 'Success') { [int]$rep.RoundtripTime } else { 999 }
+            $status = if ($lat -eq 999) { "$(C 'R' 'FAIL')" } elseif ($lat -gt 150) { "$(C 'Y' 'HIGH')" } else { "$(C 'G' 'OK')" }
+            Write-Host "  $([DateTime]::Now.ToString('HH:mm:ss')) | Target: $($best.IP) | Latency: $(if($lat -eq 999){'ERR'}else{"${lat}ms"}) | Status: $status"
+            Start-Sleep -Seconds 5
+        }
+    } finally {
+        if ($null -ne $pinger) { $pinger.Dispose() }
+    }
+}
+
 function Test-Bufferbloat {
     Write-Host "`n  $(C 'BOLD' 'Bufferbloat & Responsiveness Sanity Probe')"
     Write-Host "  $(C 'DG' 'Testing HTTP(S) connection establishment latency...')"
@@ -998,6 +1040,57 @@ function Inspect-DnsCache {
     $resp = Read-Host "  [C] Clear/Flush Cache | [B] Back"
     if ($resp -match '^c$') { Clear-DnsClientCache -ErrorAction SilentlyContinue; ipconfig /flushdns | Out-Null; Write-Host "  $(C 'G' 'Cache flushed.')" }
 }
+function Test-DnsLeak {
+    Write-Host "`n  $(C 'BOLD' 'DNS Leak & Captive Portal / Transparent Proxy Detector')"
+    Write-Host "  $(C 'DG' 'Actively probing if upstream ISP intercepts port 53 UDP queries...')"
+    
+    $uniqueHost = "$([guid]::NewGuid().ToString('N').Substring(0,12)).edns.ip-api.com"
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $udp = $null
+    $intercepted = $false
+    try {
+        $udp = New-Object System.Net.Sockets.UdpClient
+        $udp.Client.ReceiveTimeout = 2000
+        $udp.Client.SendTimeout = 2000
+        
+        $ms = New-Object System.IO.MemoryStream
+        $ms.WriteByte([byte]0xAA)
+        $ms.WriteByte([byte]0xAA)
+        $flags = [byte[]](0x01,0x00, 0x00,0x01, 0x00,0x00, 0x00,0x00, 0x00,0x00)
+        $ms.Write($flags, 0, $flags.Length)
+        foreach ($lbl in $uniqueHost.Split('.')) {
+            $ms.WriteByte([byte]$lbl.Length)
+            $b = [System.Text.Encoding]::ASCII.GetBytes($lbl)
+            $ms.Write($b, 0, $b.Length)
+        }
+        $ms.WriteByte(0x00)
+        $ms.Write([byte[]](0x00,0x10, 0x00,0x01), 0, 4) # TXT record
+        $pkt = $ms.ToArray()
+        $ms.Dispose()
+
+        # Send to a known non-DNS server that drops port 53 (e.g. standard time server or non-listening port)
+        # If we get a response, the ISP is transparently redirecting port 53 to their own DNS.
+        $target = "192.0.2.1" # TEST-NET-1 (non-routable/blackholed)
+        $udp.Connect($target, 53)
+        [void]$udp.Send($pkt, $pkt.Length)
+        
+        Write-Host "  $(C 'C' "Sent crafted DNS probe to a blackholed IP ($target)...")"
+        $ep = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+        $res = $udp.Receive([ref]$ep)
+        
+        if ($res -and $res.Length -ge 12) {
+            $intercepted = $true
+            Write-Host "  $(C 'R' "WARNING: Probe received a DNS response from $($ep.Address)!")"
+            Write-Host "  $(C 'Y' 'Your ISP or local network router is actively intercepting and redirecting port 53 traffic.')"
+            Write-Host "  $(C 'DG' 'Recommendation: Switch to DNS-over-HTTPS (DoH) or DNS-over-TLS (DoT) to bypass interception.')"
+        }
+    } catch {
+        # Timeout is expected behavior here, meaning no interception.
+        Write-Host "  $(C 'G' 'Passed: No transparent DNS interception detected on Port 53 UDP.')"
+    } finally {
+        if ($null -ne $udp) { try { $udp.Close(); $udp.Dispose() } catch {} }
+    }
+}
 function Test-CustomDnsResolver {
     param($Results)
     Write-Host "`n  $(C 'BOLD' 'Custom DNS Resolver Benchmark')"
@@ -1032,7 +1125,7 @@ function Show-Menu {
     param($Results, $ElapsedSec)
 
     $adapter = Get-ActiveAdapter
-    $aName = if ($adapter) { $adapter.Name } else { 'NONE DETECTED' }
+    $aName = if ($script:SelectedAdapter) { $script:SelectedAdapter.Name } elseif ($adapter) { $adapter.Name } else { 'NONE DETECTED' }
 
     while ($true) {
         # Menu row helper: pads content to exactly 60 visible chars between │ borders
@@ -1059,7 +1152,7 @@ function Show-Menu {
         Write-Host (MR " $(C 'C' '12.') Live Latency & Jitter Monitor (Real-time)" 47)
         Write-Host (MR " $(C 'C' '13.') Compare Active ISP DNS vs Top Providers" 44)
         Write-Host (MR " $(C 'M' '14.') Enable Windows Native DNS-over-HTTPS (DoH)" 48)
-        Write-Host (MR " $(C 'Y' '15.') Network Bufferbloat & Response Sanity Test" 47)
+        Write-Host (MR " $(C 'Y' '15.') DNS Health Watchdog (Background Loop)" 47)
         Write-Host (MR " $(C 'C' '16.') Trace Edge Gateway & Route Hops (Visual Traceroute)" 56)
         Write-Host (MR " $(C 'M' '17.') Inspect Active DNS Client Cache & TTL" 42)
         Write-Host (MR " $(C 'Y' '18.') Benchmark Custom Resolver / Local Pi-hole" 46)
@@ -1068,6 +1161,8 @@ function Show-Menu {
         Write-Host (MR " $(C 'M' '9.') Restore Previous DNS from Backup" 35)
         Write-Host (MR " $(C 'Y' '10.') Reset to Default DHCP (ISP)" 31)
         Write-Host (MR " $(C 'B' '11.') Export Full Telemetry (CSV/JSON/Markdown)" 46)
+        Write-Host (MR " $(C 'C' '19.') Select Target Network Adapter" 33)
+        Write-Host (MR " $(C 'M' '20.') Test DNS Leak & Transparent Proxy" 41)
         Write-Host "  $(C 'C' '├──────────────────────────────────────────────────────────────┤')"
         Write-Host (MR "$(C 'DG' '[ EXIT ]')" 8)
         Write-Host (MR " $(C 'DG' '0.') Exit" 8)
@@ -1177,10 +1272,18 @@ function Show-Menu {
             '12' { Monitor-LiveLatency }
             '13' { Compare-ActiveISP -Results $Results }
             '14' { Enable-WindowsNativeDoH }
-            '15' { Test-Bufferbloat }
+            '15' { Monitor-Watchdog -Results $Results }
             '16' { Trace-EdgeGateway }
             '17' { Inspect-DnsCache }
             '18' { Test-CustomDnsResolver -Results $Results }
+            '19' {
+                $script:SelectedAdapter = Get-ActiveAdapterMenu
+                if ($script:SelectedAdapter) {
+                    Write-Host "  $(C 'G' "Adapter set to $($script:SelectedAdapter.Name). Re-run benchmark to apply.")"
+                    $aName = $script:SelectedAdapter.Name
+                }
+            }
+            '20' { Test-DnsLeak }
             '0' { Write-Host "  $(C 'DG' 'Goodbye.')"; return }
             default { Write-Host "  $(C 'Y' 'Invalid choice.')" }
         }
